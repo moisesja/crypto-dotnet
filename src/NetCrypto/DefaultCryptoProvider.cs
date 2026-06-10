@@ -14,9 +14,11 @@ namespace NetCrypto;
 /// </summary>
 public sealed class DefaultCryptoProvider : ICryptoProvider
 {
+    /// <inheritdoc />
     public byte[] Sign(KeyType keyType, ReadOnlySpan<byte> privateKey, ReadOnlySpan<byte> data)
         => Sign(keyType, privateKey, data, EcdsaSignatureFormat.Der);
 
+    /// <inheritdoc />
     public byte[] Sign(KeyType keyType, ReadOnlySpan<byte> privateKey, ReadOnlySpan<byte> data, EcdsaSignatureFormat format)
     {
         var ecFormat = ToDsaFormat(format);
@@ -33,9 +35,11 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
         };
     }
 
+    /// <inheritdoc />
     public bool Verify(KeyType keyType, ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> data, ReadOnlySpan<byte> signature)
         => Verify(keyType, publicKey, data, signature, EcdsaSignatureFormat.Der);
 
+    /// <inheritdoc />
     public bool Verify(KeyType keyType, ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> data, ReadOnlySpan<byte> signature, EcdsaSignatureFormat format)
     {
         var ecFormat = ToDsaFormat(format);
@@ -59,6 +63,7 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
         _ => throw new ArgumentException($"Unknown ECDSA signature format: {format}", nameof(format))
     };
 
+    /// <inheritdoc />
     public byte[] KeyAgreement(ReadOnlySpan<byte> privateKey, ReadOnlySpan<byte> publicKey)
     {
         var algorithm = NSec.Cryptography.KeyAgreementAlgorithm.X25519;
@@ -77,6 +82,7 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
         return derivedKey.Export(KeyBlobFormat.RawSymmetricKey);
     }
 
+    /// <inheritdoc />
     public byte[] DeriveSharedSecret(KeyType keyType, ReadOnlySpan<byte> privateKey, ReadOnlySpan<byte> publicKey)
     {
         return keyType switch

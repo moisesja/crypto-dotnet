@@ -6,6 +6,7 @@ namespace NetCrypto;
 /// </summary>
 public interface ISigner
 {
+    /// <summary>The type of the key backing this signer.</summary>
     KeyType KeyType { get; }
 
     /// <summary>The public key bytes (always available, even for HSM-backed signers).</summary>

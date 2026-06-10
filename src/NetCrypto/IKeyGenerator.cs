@@ -1,5 +1,6 @@
 namespace NetCrypto;
 
+/// <summary>Generates, restores and derives cryptographic key pairs.</summary>
 public interface IKeyGenerator
 {
     /// <summary>Generate a new random key pair for the given key type.</summary>

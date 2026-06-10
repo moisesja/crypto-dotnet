@@ -10,6 +10,7 @@ namespace NetCrypto;
 /// </summary>
 public sealed class DefaultKeyGenerator : IKeyGenerator
 {
+    /// <inheritdoc />
     public KeyPair Generate(KeyType keyType)
     {
         return keyType switch
@@ -25,6 +26,7 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
         };
     }
 
+    /// <inheritdoc />
     public KeyPair FromPrivateKey(KeyType keyType, ReadOnlySpan<byte> privateKey)
     {
         return keyType switch
@@ -40,6 +42,7 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
         };
     }
 
+    /// <inheritdoc />
     public PublicKeyReference FromPublicKey(KeyType keyType, ReadOnlySpan<byte> publicKey)
     {
         return new PublicKeyReference
@@ -49,6 +52,7 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
         };
     }
 
+    /// <inheritdoc />
     public KeyPair DeriveX25519FromEd25519(KeyPair ed25519KeyPair)
     {
         if (ed25519KeyPair.KeyType != KeyType.Ed25519)
@@ -85,6 +89,7 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
         };
     }
 
+    /// <inheritdoc />
     public PublicKeyReference DeriveX25519PublicKeyFromEd25519(ReadOnlySpan<byte> ed25519PublicKey)
     {
         if (ed25519PublicKey.Length != 32)

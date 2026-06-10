@@ -11,12 +11,14 @@ public sealed class InMemoryKeyStore : IKeyStore
     private readonly IKeyGenerator _keyGenerator;
     private readonly ICryptoProvider _cryptoProvider;
 
+    /// <summary>Creates an in-memory key store backed by the given key generator and crypto provider.</summary>
     public InMemoryKeyStore(IKeyGenerator keyGenerator, ICryptoProvider cryptoProvider)
     {
         _keyGenerator = keyGenerator ?? throw new ArgumentNullException(nameof(keyGenerator));
         _cryptoProvider = cryptoProvider ?? throw new ArgumentNullException(nameof(cryptoProvider));
     }
 
+    /// <inheritdoc />
     public Task<StoredKeyInfo> GenerateAsync(string alias, KeyType keyType, CancellationToken ct = default)
     {
         var keyPair = _keyGenerator.Generate(keyType);
@@ -33,6 +35,7 @@ public sealed class InMemoryKeyStore : IKeyStore
         return Task.FromResult(info);
     }
 
+    /// <inheritdoc />
     public Task<StoredKeyInfo> ImportAsync(string alias, KeyPair keyPair, CancellationToken ct = default)
     {
         var info = new StoredKeyInfo
@@ -48,6 +51,7 @@ public sealed class InMemoryKeyStore : IKeyStore
         return Task.FromResult(info);
     }
 
+    /// <inheritdoc />
     public Task<StoredKeyInfo?> GetInfoAsync(string alias, CancellationToken ct = default)
     {
         if (_keys.TryGetValue(alias, out var entry))
@@ -56,6 +60,7 @@ public sealed class InMemoryKeyStore : IKeyStore
         return Task.FromResult<StoredKeyInfo?>(null);
     }
 
+    /// <inheritdoc />
     public Task<byte[]> SignAsync(string alias, ReadOnlyMemory<byte> data, CancellationToken ct = default)
     {
         if (!_keys.TryGetValue(alias, out var entry))
@@ -65,6 +70,7 @@ public sealed class InMemoryKeyStore : IKeyStore
         return Task.FromResult(signature);
     }
 
+    /// <inheritdoc />
     public Task<ISigner> CreateSignerAsync(string alias, CancellationToken ct = default)
     {
         if (!_keys.TryGetValue(alias, out var entry))
@@ -74,12 +80,14 @@ public sealed class InMemoryKeyStore : IKeyStore
         return Task.FromResult(signer);
     }
 
+    /// <inheritdoc />
     public Task<IReadOnlyList<string>> ListAsync(CancellationToken ct = default)
     {
         IReadOnlyList<string> aliases = _keys.Keys.ToList();
         return Task.FromResult(aliases);
     }
 
+    /// <inheritdoc />
     public Task<bool> DeleteAsync(string alias, CancellationToken ct = default)
     {
         var removed = _keys.TryRemove(alias, out _);

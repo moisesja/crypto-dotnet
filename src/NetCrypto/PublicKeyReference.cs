@@ -8,7 +8,10 @@ namespace NetCrypto;
 /// </summary>
 public sealed class PublicKeyReference
 {
+    /// <summary>The type of the referenced key.</summary>
     public required KeyType KeyType { get; init; }
+
+    /// <summary>The raw public key bytes.</summary>
     public required byte[] PublicKey { get; init; }
 
     /// <summary>

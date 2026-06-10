@@ -3,10 +3,16 @@ using NetCid;
 
 namespace NetCrypto;
 
+/// <summary>A cryptographic key pair holding both public and private key material.</summary>
 public sealed class KeyPair
 {
+    /// <summary>The type of the key pair.</summary>
     public required KeyType KeyType { get; init; }
+
+    /// <summary>The raw public key bytes.</summary>
     public required byte[] PublicKey { get; init; }
+
+    /// <summary>The raw private key bytes.</summary>
     public required byte[] PrivateKey { get; init; }
 
     /// <summary>
