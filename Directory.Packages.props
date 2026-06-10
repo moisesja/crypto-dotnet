@@ -8,7 +8,7 @@
     <PackageVersion Include="NBitcoin.Secp256k1" Version="4.0.0" />
     <PackageVersion Include="Nethermind.Crypto.Bls" Version="1.0.5" />
     <!-- Encoding -->
-    <PackageVersion Include="NetCid" Version="1.5.0" />
+    <PackageVersion Include="NetCid" Version="1.6.0" />
     <!-- JWK -->
     <PackageVersion Include="Microsoft.IdentityModel.Tokens" Version="8.19.1" />
     <!-- Dependency injection -->

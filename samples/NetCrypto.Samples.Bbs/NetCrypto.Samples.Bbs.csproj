@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/NetCrypto/NetCrypto.csproj" />
+  </ItemGroup>
+  <!-- Copy the locally / CI-built zkryptium-ffi binary next to the sample executable when
+       present. When the crate was never built, nothing is copied and the sample exercises
+       the supported BBS-absent mode instead. -->
+  <ItemGroup Condition="Exists('../../native/zkryptium-ffi/target/release/libzkryptium_ffi.dylib')">
+    <None Include="../../native/zkryptium-ffi/target/release/libzkryptium_ffi.dylib" CopyToOutputDirectory="PreserveNewest" Link="libzkryptium_ffi.dylib" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('../../native/zkryptium-ffi/target/release/libzkryptium_ffi.so')">
+    <None Include="../../native/zkryptium-ffi/target/release/libzkryptium_ffi.so" CopyToOutputDirectory="PreserveNewest" Link="libzkryptium_ffi.so" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('../../native/zkryptium-ffi/target/release/zkryptium_ffi.dll')">
+    <None Include="../../native/zkryptium-ffi/target/release/zkryptium_ffi.dll" CopyToOutputDirectory="PreserveNewest" Link="zkryptium_ffi.dll" />
+  </ItemGroup>
+</Project>
