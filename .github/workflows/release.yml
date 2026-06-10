@@ -1,0 +1,232 @@
+# PRD FR-21 / FR-22 — tag-triggered (v*) pack & publish.
+#
+# Builds the zkryptium-ffi crate for all five supported RIDs, assembles them into
+# src/NetCrypto/runtimes/{rid}/native/ with the exact filenames .NET probes for,
+# packs a single NetCrypto.nupkg, publishes SHA-256 checksums (5 binaries + nupkg)
+# as release assets, smoke-tests the packed package per hosted-runner RID, and only
+# then pushes to NuGet (gated on all prior jobs).
+#
+# Runner/RID coverage notes (FR-22 limitation documentation):
+# - linux-x64, osx-arm64, win-x64: built AND smoke-executed natively on hosted runners.
+# - linux-arm64: cross-compiled on ubuntu-latest with the aarch64-linux-gnu toolchain
+#   (zkryptium is pure Rust, so only a linker is needed). If GitHub-hosted arm64 Linux
+#   runners (ubuntu-*-arm) are available to this repository, the smoke matrix exercises
+#   the binary there; otherwise the RID is covered by binary presence + checksum only.
+# - osx-x64: cross-compiled on the arm64 macOS runner (x86_64-apple-darwin target).
+#   GitHub no longer offers free Intel macOS runners, so this RID is covered by binary
+#   presence + checksum; Rosetta-capable hosts will load it at runtime.
+#
+# The repository stays source-only: runtimes/ payloads exist only inside the CI
+# workspace and the packed .nupkg (gitignored locally; FR-21 AC).
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  natives:
+    name: native (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - rid: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: libzkryptium_ffi.so
+          - rid: linux-arm64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: libzkryptium_ffi.so
+          - rid: osx-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: libzkryptium_ffi.dylib
+          - rid: osx-x64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: libzkryptium_ffi.dylib
+          - rid: win-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: zkryptium_ffi.dll
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install aarch64 cross toolchain (linux-arm64 only)
+        if: matrix.rid == 'linux-arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      # rustup honors native/zkryptium-ffi/rust-toolchain.toml (pinned toolchain).
+      - name: Build native library
+        shell: bash
+        run: |
+          cd native/zkryptium-ffi
+          rustup target add ${{ matrix.target }}
+          cargo build --release --target ${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.rid }}
+          path: native/zkryptium-ffi/target/${{ matrix.target }}/release/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  pack:
+    name: pack + checksums
+    needs: natives
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Assemble runtimes payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          declare -A lib=( [linux-x64]=libzkryptium_ffi.so [linux-arm64]=libzkryptium_ffi.so \
+                           [osx-arm64]=libzkryptium_ffi.dylib [osx-x64]=libzkryptium_ffi.dylib \
+                           [win-x64]=zkryptium_ffi.dll )
+          for rid in linux-x64 linux-arm64 osx-arm64 osx-x64 win-x64; do
+            mkdir -p "src/NetCrypto/runtimes/${rid}/native"
+          done
+        # artifacts are downloaded into the per-RID folders in the next step
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: /tmp/natives
+
+      - name: Place binaries with exact probe filenames
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp /tmp/natives/native-linux-x64/libzkryptium_ffi.so   src/NetCrypto/runtimes/linux-x64/native/
+          cp /tmp/natives/native-linux-arm64/libzkryptium_ffi.so src/NetCrypto/runtimes/linux-arm64/native/
+          cp /tmp/natives/native-osx-arm64/libzkryptium_ffi.dylib src/NetCrypto/runtimes/osx-arm64/native/
+          cp /tmp/natives/native-osx-x64/libzkryptium_ffi.dylib   src/NetCrypto/runtimes/osx-x64/native/
+          cp /tmp/natives/native-win-x64/zkryptium_ffi.dll        src/NetCrypto/runtimes/win-x64/native/
+          find src/NetCrypto/runtimes -type f | sort
+
+      - name: Pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          dotnet pack src/NetCrypto/NetCrypto.csproj --configuration Release \
+            -p:NetCryptoVersion="${VERSION}" --output artifacts
+
+      - name: Verify nupkg contains all five RIDs (FR-21 AC)
+        shell: bash
+        run: |
+          set -euo pipefail
+          listing=$(unzip -l "artifacts/NetCrypto.${VERSION}.nupkg")
+          echo "${listing}"
+          for entry in \
+            "runtimes/linux-x64/native/libzkryptium_ffi.so" \
+            "runtimes/linux-arm64/native/libzkryptium_ffi.so" \
+            "runtimes/osx-arm64/native/libzkryptium_ffi.dylib" \
+            "runtimes/osx-x64/native/libzkryptium_ffi.dylib" \
+            "runtimes/win-x64/native/zkryptium_ffi.dll"; do
+            echo "${listing}" | grep -F "${entry}" > /dev/null || { echo "MISSING ${entry}"; exit 1; }
+          done
+
+      - name: SHA-256 checksums (5 binaries + nupkg = 6 entries, FR-21 AC)
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            for rid in linux-x64 linux-arm64 osx-arm64 osx-x64 win-x64; do
+              (cd "src/NetCrypto/runtimes/${rid}/native" && sha256sum * | sed "s|  |  ${rid}/|")
+            done
+            (cd artifacts && sha256sum "NetCrypto.${VERSION}.nupkg")
+          } > artifacts/SHA256SUMS.txt
+          [ "$(wc -l < artifacts/SHA256SUMS.txt)" -eq 6 ]
+          cat artifacts/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: |
+            artifacts/*.nupkg
+            artifacts/*.snupkg
+            artifacts/SHA256SUMS.txt
+          if-no-files-found: error
+
+  # FR-22 — install the packed nupkg from a local feed into a minimal console app,
+  # run one BBS sign/verify round-trip, print IsAvailable; must exit 0.
+  smoke:
+    name: smoke (${{ matrix.os }})
+    needs: pack
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Add 'ubuntu-24.04-arm' here when arm64 hosted runners are enabled for this
+        # repository to smoke-execute linux-arm64 (FR-22). osx-x64 has no hosted
+        # runner; it is covered by binary presence + checksums (see header note).
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+          path: localfeed
+
+      - name: Build + run smoke app against the packed package
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir smoke && cd smoke
+          dotnet new console --framework net10.0
+          cp ../.github/smoke/Program.cs Program.cs
+          dotnet add package NetCrypto --version "${VERSION}" --source ../localfeed
+          dotnet run --configuration Release
+
+  publish:
+    name: publish (NuGet + release assets)
+    needs: [pack, smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+          path: artifacts
+
+      - name: Create GitHub release with checksums (FR-21)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            artifacts/SHA256SUMS.txt artifacts/*.nupkg artifacts/*.snupkg \
+            --title "NetCrypto ${GITHUB_REF_NAME}" --generate-notes
+
+      - name: Push to NuGet (gated on all prior jobs)
+        run: |
+          dotnet nuget push artifacts/*.nupkg \
+            --api-key "${{ secrets.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate

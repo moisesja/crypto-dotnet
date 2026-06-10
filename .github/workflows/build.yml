@@ -1,0 +1,81 @@
+# PRD FR-20 — runs on every PR and push to main.
+# Three OS legs build the native BBS library for the host target and run the full
+# suite (BBS included); a fourth leg proves the supported BBS-absent mode
+# (concept decision 8): no native library, managed primitives green,
+# BbsUnavailableException tests included.
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    name: build-test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      # rustup honors native/zkryptium-ffi/rust-toolchain.toml (pinned toolchain, FR-20).
+      - name: Build native BBS library (host target)
+        shell: bash
+        run: |
+          cd native/zkryptium-ffi
+          cargo build --release
+          cargo test --release
+
+      # The test and Bbs-sample projects copy the freshly built binary into their
+      # outputs via Exists()-conditional items, so building after cargo suffices.
+      - name: Build (warnings as errors)
+        shell: bash
+        run: dotnet build NetCrypto.sln --configuration Release -warnaserror
+
+      - name: Test (native present; BbsAbsent-mode tests excluded)
+        shell: bash
+        run: dotnet test NetCrypto.sln --configuration Release --no-build --filter "Category!=BbsAbsent"
+
+      # FR-17: every sample is executed and must exit 0 on all three OS legs.
+      - name: Run all samples
+        shell: bash
+        run: |
+          set -euo pipefail
+          for proj in samples/*/; do
+            echo "=== ${proj} ==="
+            dotnet run --project "${proj}" --configuration Release --no-build
+          done
+
+      # FR-17 coverage check: every public type/member name must appear in samples/.
+      - name: API coverage check
+        shell: bash
+        run: dotnet run --project tools/ApiCoverageCheck --configuration Release --no-build -- samples
+
+  # FR-20 fourth leg — BBS-absent supported mode: the native library is never built,
+  # BBS-required tests are filtered out, the FR-5 unavailability tests run, and the
+  # BBS sample must exit 0 via its graceful-degradation path.
+  no-native:
+    name: no-native (BBS-absent supported mode)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build (no native library on purpose)
+        run: dotnet build NetCrypto.sln --configuration Release -warnaserror
+
+      - name: Test without native library (BbsAbsent tests included)
+        run: dotnet test NetCrypto.sln --configuration Release --no-build --filter "Category!=NativeFFI"
+
+      - name: BBS sample exits 0 via unavailable-mode path
+        run: dotnet run --project samples/NetCrypto.Samples.Bbs --configuration Release --no-build
