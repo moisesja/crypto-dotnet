@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>NetCrypto</PackageId>
+    <RootNamespace>NetCrypto</RootNamespace>
+    <AssemblyName>NetCrypto</AssemblyName>
+    <Version>$(NetCryptoVersion)</Version>
+    <Description>Unified cryptographic primitives for the NetCid/NetDid library stack: EdDSA, ECDSA (NIST + secp256k1, incl. recoverable), BLS12-381, BBS selective-disclosure signatures, X25519/ECDH, KDFs, AEADs, hashing (incl. Keccak-256), key model, signing and key-store abstractions, and JWK conversion.</Description>
+    <PackageTags>cryptography;ed25519;eddsa;ecdsa;secp256k1;bls12-381;bbs;x25519;ecdh;hkdf;aes-gcm;aes-kw;xchacha20;keccak;jwk</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- NFR-5: missing XML docs on public members is an error -->
+    <WarningsAsErrors>$(WarningsAsErrors);CS1591</WarningsAsErrors>
+    <!-- Required by the LibraryImport-generated span marshalling in the FFI layer -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NetCrypto.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NetCid" />
+    <PackageReference Include="NSec.Cryptography" />
+    <PackageReference Include="NBitcoin.Secp256k1" />
+    <PackageReference Include="Nethermind.Crypto.Bls" />
+    <PackageReference Include="Microsoft.IdentityModel.Tokens" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" PrivateAssets="All" />
+  </ItemGroup>
+
+  <!-- Native BBS payloads: empty in git, populated by release CI at pack time (FR-21) -->
+  <ItemGroup>
+    <None Include="runtimes\**\native\*" Pack="true" PackagePath="runtimes" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="PublicAPI.Shipped.txt" />
+    <AdditionalFiles Include="PublicAPI.Unshipped.txt" />
+  </ItemGroup>
+
+</Project>

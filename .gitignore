@@ -1,0 +1,15 @@
+# Build outputs
+bin/
+obj/
+artifacts/
+*.user
+
+# Native payloads are CI-produced only; the repo stays source-only (PRD FR-20/FR-21)
+**/runtimes/**/native/*
+
+# Rust build output
+native/zkryptium-ffi/target/
+
+# OS noise
+.DS_Store
+.claude/settings.json

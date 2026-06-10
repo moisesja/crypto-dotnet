@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <!-- Test-only Keccak reference (FR-11 differential); forbidden in src/ -->
+    <PackageReference Include="BouncyCastle.Cryptography" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/NetCrypto/NetCrypto.csproj" />
+  </ItemGroup>
+
+  <!-- Copy the locally / CI-built zkryptium-ffi binary next to the test assembly when present.
+       The no-native CI leg simply never builds the crate, so nothing is copied (FR-20). -->
+  <ItemGroup Condition="Exists('../../native/zkryptium-ffi/target/release/libzkryptium_ffi.dylib')">
+    <None Include="../../native/zkryptium-ffi/target/release/libzkryptium_ffi.dylib" CopyToOutputDirectory="PreserveNewest" Link="libzkryptium_ffi.dylib" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('../../native/zkryptium-ffi/target/release/libzkryptium_ffi.so')">
+    <None Include="../../native/zkryptium-ffi/target/release/libzkryptium_ffi.so" CopyToOutputDirectory="PreserveNewest" Link="libzkryptium_ffi.so" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('../../native/zkryptium-ffi/target/release/zkryptium_ffi.dll')">
+    <None Include="../../native/zkryptium-ffi/target/release/zkryptium_ffi.dll" CopyToOutputDirectory="PreserveNewest" Link="zkryptium_ffi.dll" />
+  </ItemGroup>
+
+</Project>
