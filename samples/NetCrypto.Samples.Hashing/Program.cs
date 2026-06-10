@@ -74,6 +74,15 @@ Check(digestBuffer.SequenceEqual(sha256), "span overload produces the same diges
 // never throws, so you can size buffers defensively and branch on the bool.
 Span<byte> tooSmall = stackalloc byte[16];
 Check(!Hash.TrySha256(abc, tooSmall, out _), "TrySha256 refuses a 16-byte buffer instead of throwing");
+
+// The same Try* contract exists at every width: TrySha384 wants 48 bytes,
+// TrySha512 wants 64 — pick the one matching your protocol's hash.
+Span<byte> buffer384 = stackalloc byte[48];
+Span<byte> buffer512 = stackalloc byte[64];
+Check(Hash.TrySha384(abc, buffer384, out _) && buffer384.SequenceEqual(sha384),
+    "TrySha384 fills 48 bytes, matching the array overload");
+Check(Hash.TrySha512(abc, buffer512, out _) && buffer512.SequenceEqual(sha512),
+    "TrySha512 fills 64 bytes, matching the array overload");
 Console.WriteLine();
 
 // -------------------------------------------------------

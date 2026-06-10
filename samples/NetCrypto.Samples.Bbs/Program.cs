@@ -15,6 +15,12 @@ using NetCrypto;
 // (zkryptium-ffi). Construct it and print which suite it runs.
 var bbs = new DefaultBbsCryptoProvider();
 Console.WriteLine($"Provider ciphersuite: {bbs.Ciphersuite}");
+
+// Ciphersuite is plain metadata (it never touches the native binary), so it
+// is safe to read even when BBS is unavailable. v1 supports exactly one
+// BbsCiphersuite value: the draft-10 BLS12-381-SHA-256 suite.
+Check(bbs.Ciphersuite == BbsCiphersuite.Bls12381Sha256,
+    "the provider reports the BbsCiphersuite.Bls12381Sha256 suite");
 Console.WriteLine();
 
 // -------------------------------------------------------

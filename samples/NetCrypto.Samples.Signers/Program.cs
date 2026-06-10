@@ -5,11 +5,10 @@ using NetCrypto;
 // ISigner, KeyPairSigner, IKeyStore, KeyStoreSigner, StoredKeyInfo
 // ============================================================
 //
-// ISigner is the single signing abstraction the rest of the stack
-// (DIDs, credentials, data proofs) is written against. Callers never
-// touch private key bytes — they only ask "sign these bytes for me".
-// That way the same calling code works whether the key sits in memory,
-// in a vault, or inside an HSM that never releases it.
+// ISigner is the single signing abstraction the rest of the stack (DIDs,
+// credentials, data proofs) is written against. Callers never touch private
+// key bytes — they only ask "sign these bytes for me" — so the same code
+// works whether the key sits in memory, a vault, or an HSM.
 
 var keyGen = new DefaultKeyGenerator();
 var crypto = new DefaultCryptoProvider();
@@ -43,14 +42,14 @@ Console.WriteLine();
 // -------------------------------------------------------
 Console.WriteLine("=== 2. IKeyStore (minimal store defined in this file) ===");
 
-// MiniKeyStore (bottom of this file) implements all seven IKeyStore
-// members. Notice what the interface deliberately does NOT have: a
-// "GetPrivateKey". Keys are born inside the store, and the only way to
-// use one is SignAsync(alias, data) — the single signing door.
+// MiniKeyStore (bottom of this file) implements all seven IKeyStore members.
+// Notice what the interface deliberately does NOT have: a "GetPrivateKey".
+// Keys are born inside the store, and the only way to use one is
+// SignAsync(alias, data) — the single signing door.
 IKeyStore store = new MiniKeyStore(keyGen, crypto);
 
 // GenerateAsync creates the key inside the store; the caller only ever
-// receives StoredKeyInfo — alias, key type and public key. Nothing secret.
+// receives StoredKeyInfo — alias, key type, public key. Nothing secret.
 var info = await store.GenerateAsync("issuer-key", KeyType.Ed25519);
 Console.WriteLine($"  Alias:     {info.Alias}");
 Console.WriteLine($"  KeyType:   {info.KeyType}");
@@ -60,8 +59,8 @@ Console.WriteLine($"  Multibase: {info.MultibasePublicKey}");
 var fetched = await store.GetInfoAsync("issuer-key");
 Check(fetched is not null && fetched.Alias == "issuer-key", "GetInfoAsync finds the stored key");
 
-// SignAsync(alias, data): bytes in, signature out — the private key
-// never crosses the call boundary. This is the whole HSM-first pattern.
+// SignAsync(alias, data): bytes in, signature out — the private key never
+// crosses the call boundary. This is the whole HSM-first pattern.
 var sig2 = await store.SignAsync("issuer-key", message);
 var ok2 = crypto.Verify(info.KeyType, info.PublicKey, message, sig2);
 Console.WriteLine($"  Store-signed: {sig2.Length} bytes, verifies: {ok2}");
@@ -73,13 +72,13 @@ Console.WriteLine();
 // -------------------------------------------------------
 Console.WriteLine("=== 3. KeyStoreSigner via IKeyStore.CreateSignerAsync ===");
 
-// CreateSignerAsync wraps an alias as an ISigner (a KeyStoreSigner), so
-// code written against ISigner — a DID method, a proof generator — cannot
-// tell, and must not care, whether a raw key or a vault is behind it.
+// CreateSignerAsync wraps an alias as an ISigner (a KeyStoreSigner), so code
+// written against ISigner — a DID method, a proof generator — cannot tell,
+// and must not care, whether a raw key or a vault is behind it.
 var storeSigner = await store.CreateSignerAsync("issuer-key");
 Console.WriteLine($"  Signer public key matches StoredKeyInfo: {storeSigner.MultibasePublicKey == info.MultibasePublicKey}");
 
-// SignAsync here delegates straight back to store.SignAsync(alias, ...).
+// This SignAsync delegates straight back to store.SignAsync(alias, ...).
 var sig3 = await storeSigner.SignAsync(message);
 var ok3 = crypto.Verify(storeSigner.KeyType, storeSigner.PublicKey.Span, message, sig3);
 Console.WriteLine($"  Signed via ISigner: verifies: {ok3}");
@@ -93,9 +92,8 @@ Console.WriteLine();
 Console.WriteLine("=== 4. ImportAsync / ListAsync / DeleteAsync ===");
 
 // ImportAsync is the migration path: a key generated elsewhere is handed
-// over ONCE; from then on it is used only through the store's signing door.
-var external = keyGen.Generate(KeyType.P256);
-var imported = await store.ImportAsync("migrated-p256", external);
+// over ONCE; from then on it is only used through the store's signing door.
+var imported = await store.ImportAsync("migrated-p256", keyGen.Generate(KeyType.P256));
 Console.WriteLine($"  Imported '{imported.Alias}' ({imported.KeyType})");
 
 var aliases = await store.ListAsync();
@@ -114,9 +112,9 @@ Console.WriteLine();
 Console.WriteLine("=== 5. InMemoryKeyStore (ships with NetCrypto) ===");
 
 // You do not have to write your own store for tests and development:
-// NetCrypto ships InMemoryKeyStore with this exact contract. It keeps
-// keys in a plain dictionary — convenient, but NOT for production.
-// Production stores should sit on an HSM, OS keychain or vault.
+// NetCrypto ships InMemoryKeyStore with this exact contract. It keeps keys
+// in a plain dictionary — convenient, but NOT for production. Production
+// stores should sit on an HSM, OS keychain or vault.
 IKeyStore devStore = new InMemoryKeyStore(keyGen, crypto);
 await devStore.GenerateAsync("dev-key", KeyType.Secp256k1);
 var devSigner = await devStore.CreateSignerAsync("dev-key");
@@ -129,8 +127,8 @@ Console.WriteLine();
 Console.WriteLine("Done! All signer examples completed successfully.");
 return 0;
 
-// Prints and exits non-zero the moment an expectation fails, so CI (and
-// you) can trust that a 0 exit code means every step above really worked.
+// Exits non-zero the moment an expectation fails, so exit code 0 means
+// every step above really worked (this is what CI checks).
 static void Check(bool condition, string what)
 {
     if (condition) return;
@@ -152,7 +150,7 @@ sealed class MiniKeyStore(IKeyGenerator keyGen, ICryptoProvider crypto) : IKeySt
     public Task<StoredKeyInfo> ImportAsync(string alias, KeyPair keyPair, CancellationToken ct = default)
     {
         _keys.Add(alias, keyPair);
-        return Task.FromResult(Info(alias, keyPair)); // metadata only goes back out
+        return Task.FromResult(Info(alias, keyPair)); // only metadata goes back out
     }
 
     public Task<StoredKeyInfo?> GetInfoAsync(string alias, CancellationToken ct = default)
@@ -162,7 +160,7 @@ sealed class MiniKeyStore(IKeyGenerator keyGen, ICryptoProvider crypto) : IKeySt
     public Task<byte[]> SignAsync(string alias, ReadOnlyMemory<byte> data, CancellationToken ct = default)
         => Task.FromResult(crypto.Sign(_keys[alias].KeyType, _keys[alias].PrivateKey, data.Span));
 
-    // KeyStoreSigner only needs public facts; its SignAsync calls back here.
+    // KeyStoreSigner needs only public facts; its SignAsync calls back here.
     public Task<ISigner> CreateSignerAsync(string alias, CancellationToken ct = default)
         => Task.FromResult<ISigner>(new KeyStoreSigner(this, alias, _keys[alias].KeyType, _keys[alias].PublicKey));
 

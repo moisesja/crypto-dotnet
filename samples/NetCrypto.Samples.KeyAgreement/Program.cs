@@ -73,6 +73,26 @@ Check(aliceZp.AsSpan().SequenceEqual(bobZp), "P-256 raw Z matches on both sides"
 Console.WriteLine();
 
 // -------------------------------------------------------
+// 3b. EcPointValidator — the invalid-curve attack defense
+// -------------------------------------------------------
+Console.WriteLine("=== EcPointValidator.EnsureOnCurve ===");
+
+// Off-curve (x, y) coordinates from a malicious peer leak your static
+// private key during NIST/secp256k1 ECDH (the invalid-curve attack);
+// RFC 7518 §6.2.2 mandates validating before agreement. NetCrypto's own
+// import paths do this internally — call EnsureOnCurve yourself when a
+// peer key arrives as raw big-endian coordinates (e.g. a JWE "epk").
+var gx = Convert.FromHexString("79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798");
+var gy = Convert.FromHexString("483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8");
+EcPointValidator.EnsureOnCurve(KeyType.Secp256k1, gx, gy); // the secp256k1 generator G — on-curve, returns silently
+Check(true, "a genuine on-curve point (secp256k1 G) passes EnsureOnCurve");
+
+gy[31] ^= 0x01; // flip one bit of y — (x, y) is no longer a curve point
+try { EcPointValidator.EnsureOnCurve(KeyType.Secp256k1, gx, gy); Check(false, "off-curve point must be rejected"); }
+catch (CryptographicException) { Check(true, "off-curve (x, y) throws CryptographicException before any ECDH runs"); }
+Console.WriteLine();
+
+// -------------------------------------------------------
 // 4. Z + Concat KDF — the JOSE ECDH-ES recipe
 // -------------------------------------------------------
 Console.WriteLine("=== Concat KDF over Z (JOSE ECDH-ES style) ===");
@@ -114,6 +134,13 @@ var bobHkdf = Hkdf.DeriveKey(HashAlgorithmName.SHA256, bobZp, outputLength: 32, 
 Console.WriteLine($"  Alice key: {Convert.ToHexString(aliceHkdf)}");
 Console.WriteLine($"  Bob key:   {Convert.ToHexString(bobHkdf)}");
 Check(aliceHkdf.AsSpan().SequenceEqual(bobHkdf), "HKDF yields the same session key from the P-256 Z");
+
+// DeriveKey fuses the two RFC 5869 stages; protocols that cache the
+// pseudorandom key and expand it repeatedly (Noise, ratchet designs)
+// call Extract once and Expand per output — the result is identical.
+var prk = Hkdf.Extract(HashAlgorithmName.SHA256, aliceZp, salt);
+var expanded = Hkdf.Expand(HashAlgorithmName.SHA256, prk, outputLength: 32, info);
+Check(expanded.AsSpan().SequenceEqual(aliceHkdf), "Extract then Expand equals the one-call DeriveKey");
 Console.WriteLine();
 
 // -------------------------------------------------------

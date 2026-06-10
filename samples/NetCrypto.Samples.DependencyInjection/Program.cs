@@ -27,6 +27,9 @@ Console.WriteLine("=== 1. AddNetCrypto on a ServiceCollection ===");
 
 // One call registers all three default providers as singletons:
 // they are stateless and cheap, so a single shared instance is ideal.
+// (AddNetCrypto is an extension method declared on the static class
+// ServiceCollectionExtensions — this line is sugar for
+// ServiceCollectionExtensions.AddNetCrypto(services).)
 var services = new ServiceCollection();
 services.AddNetCrypto();
 using var provider = services.BuildServiceProvider();
