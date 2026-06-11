@@ -19,7 +19,8 @@ build_target() {
     local libname="$3"
 
     echo "Building for $target (RID: $rid)..."
-    cargo build --release --target "$target"
+    # --locked: build from the committed Cargo.lock exactly (no silent dependency drift).
+    cargo build --release --locked --target "$target"
 
     local dest="$DEST_BASE/$rid/native"
     mkdir -p "$dest"

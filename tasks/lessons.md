@@ -37,3 +37,30 @@ across boundary inputs before trusting it.
 
 **How to apply:** For variable-length crypto outputs, add a regression test at the *large* end of
 the parameter space (here ≥10 messages revealing 1), not just the happy-path small case.
+
+## L3 — NFR-3 "fuzz-lite" must use malformed-but-present inputs, not just null/zero
+
+**Context:** The 2026-06-11 security review found the *same* NFR-3 crash-class as L1 living in
+three more public methods the original fuzz pass missed: `JwkConverter.ExtractPublicKey` leaked a
+raw `FormatException` on bad base64url, `KeyTypeExtensions.NormalizeToCompressed(null)` threw
+`NullReferenceException`, and `ConcatKdf.DeriveKey` threw `OverflowException` for a huge
+`keyDataLen`. The existing `InputValidationFuzzTests` only fired null and all-zero buffers, so it
+never exercised: a structurally-valid base64 string that is not valid base64url; a point whose
+coordinate is on-curve by *value* but left-zero-trimmed in *length*; an off-curve-but-parseable
+NIST point (which made `Verify` throw instead of returning `false`); or an oversized length
+parameter. Zero buffers are a special blind spot: for P-256, x=0 decompresses to a *valid* point,
+so a zero-filled "bad key" silently took the happy path.
+
+**Rule:** "Validate the whole surface against bad input" means three input *families*, not one:
+(a) absent — null/empty; (b) wrong-shape — wrong length, oversized, non-multiple; (c)
+**structurally-valid-but-semantically-wrong** — bad base64url, off-curve points that still parse,
+left-trimmed coordinates, high-S signatures, indices past the count. Family (c) is where the real
+defects hide, because (a) and (b) usually fail fast in obvious ways. Every public method that
+parses caller bytes needs at least one family-(c) negative test.
+
+**How to apply:** When auditing a parse/import/convert method, ask "what input passes the cheap
+length/null checks but breaks the *next* layer?" and write that test. Forbidden leaked exception
+types are not just `IOOR`/`NRE` — also `FormatException`, `OverflowException`,
+`KeyNotFoundException`, and any backend exception; all must become `ArgumentException`/
+`ArgumentNullException` (or a documented `false` for verify-style methods). Widen the shared fuzz
+test to feed non-zero random and "valid-encoding-of-invalid-value" buffers, not only zeros.
