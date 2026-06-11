@@ -72,7 +72,7 @@ public static class JwkConverter
                 "BLS12381G2" => KeyType.Bls12381G2,
                 _ => throw new ArgumentException($"Unsupported OKP curve: {jwk.Crv}")
             };
-            var publicKey = Multibase.Decode("u" + jwk.X);
+            var publicKey = DecodeBase64UrlCoordinate(jwk.X, "x");
             return (keyType, publicKey);
         }
 
@@ -86,23 +86,58 @@ public static class JwkConverter
                 "secp256k1" => KeyType.Secp256k1,
                 _ => throw new ArgumentException($"Unsupported EC curve: {jwk.Crv}")
             };
-            var x = Multibase.Decode("u" + jwk.X);
-            var y = Multibase.Decode("u" + jwk.Y);
+            var x = DecodeBase64UrlCoordinate(jwk.X, "x");
+            var y = DecodeBase64UrlCoordinate(jwk.Y, "y");
 
             // Invalid-curve defense (RFC 7518 §6.2.2): reject any (x, y) that is not actually
             // on the stated curve, BEFORE the caller can use these bytes for ECDH. Failing here
             // protects every downstream consumer that does ExtractPublicKey → DeriveSharedSecret.
             EcPointValidator.EnsureOnCurve(keyType, x, y);
 
-            // Reconstruct compressed SEC1 public key: 0x02/0x03 || x
+            // Reconstruct compressed SEC1 public key: 0x02/0x03 || x. The coordinate must be
+            // left-padded to the curve's fixed field width: EnsureOnCurve compares integer
+            // *values*, so a base64url-trimmed leading-zero byte passes validation but would
+            // otherwise yield a short (e.g. 32- instead of 33-byte) SEC1 point, breaking the
+            // ToPublicJwk → ExtractPublicKey round-trip and every downstream length check.
+            var coordLen = CoordinateLength(keyType);
+            if (x.Length > coordLen)
+                throw new ArgumentException(
+                    $"JWK 'x' coordinate is {x.Length} bytes; expected at most {coordLen} for {jwk.Crv}.",
+                    nameof(jwk));
             var prefix = (y[^1] & 1) == 0 ? (byte)0x02 : (byte)0x03;
-            var publicKey = new byte[1 + x.Length];
+            var publicKey = new byte[1 + coordLen];
             publicKey[0] = prefix;
-            x.CopyTo(publicKey, 1);
+            x.CopyTo(publicKey.AsSpan(1 + coordLen - x.Length));
             return (keyType, publicKey);
         }
 
         throw new ArgumentException($"Unsupported JWK key type: {jwk.Kty}");
+    }
+
+    private static int CoordinateLength(KeyType keyType) => keyType switch
+    {
+        KeyType.P256 or KeyType.Secp256k1 => 32,
+        KeyType.P384 => 48,
+        KeyType.P521 => 66,
+        _ => throw new ArgumentException($"No EC coordinate length for key type: {keyType}", nameof(keyType))
+    };
+
+    // Decode a JWK base64url coordinate, normalizing a malformed value to ArgumentException
+    // (NetCid.Multibase throws CidFormatException : FormatException, which NFR-3 forbids from a
+    // public method given untrusted JWK input).
+    private static byte[] DecodeBase64UrlCoordinate(string? value, string member)
+    {
+        const string ParamName = "jwk";
+        if (value is null)
+            throw new ArgumentException($"JWK is missing the required '{member}' coordinate.", ParamName);
+        try
+        {
+            return Multibase.Decode("u" + value);
+        }
+        catch (FormatException ex)
+        {
+            throw new ArgumentException($"JWK '{member}' coordinate is not valid base64url.", ParamName, ex);
+        }
     }
 
     private static JsonWebKey CreateOkpJwk(string crv, byte[] publicKey)

@@ -10,6 +10,12 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: this workflow only builds and tests. Pinning the token to read
+# stops a compromised build step (e.g. a poisoned dependency executing under a PR)
+# from using the default read/write GITHUB_TOKEN to push to the repo.
+permissions:
+  contents: read
+
 jobs:
   build-test:
     name: build-test (${{ matrix.os }})
@@ -30,8 +36,10 @@ jobs:
         shell: bash
         run: |
           cd native/zkryptium-ffi
-          cargo build --release
-          cargo test --release
+          # --locked: build against the committed Cargo.lock exactly; fail loudly if it is
+          # stale rather than silently resolving newer (unaudited) transitive crates.
+          cargo build --release --locked
+          cargo test --release --locked
 
       # The test and Bbs-sample projects copy the freshly built binary into their
       # outputs via Exists()-conditional items, so building after cargo suffices.

@@ -76,6 +76,13 @@ public static class Secp256k1Recoverable
     /// performs no <c>v</c>-encoding or decoding.</param>
     /// <param name="compressed"><c>true</c> for the 33-byte compressed SEC 1 encoding;
     /// <c>false</c> (default) for the 65-byte uncompressed encoding with <c>0x04</c> prefix.</param>
+    /// <remarks>
+    /// Recovery validates only that <paramref name="signature64"/>'s scalars are reduced and
+    /// non-zero (in <c>[1, n-1]</c>). It does <b>not</b> require low-S: a high-S (malleated)
+    /// signature recovers a valid — but different — public key without error, exactly as
+    /// secp256k1 ECDSA recovery is defined. Callers that need BIP-62/EIP-2 canonical (low-S)
+    /// signatures must enforce <c>S ≤ n/2</c> themselves before trusting a recovered identity.
+    /// </remarks>
     /// <returns>The recovered public key, 33 or 65 bytes per <paramref name="compressed"/>.</returns>
     /// <exception cref="ArgumentException">If <paramref name="digest32"/> is not 32 bytes,
     /// or <paramref name="signature64"/> is not 64 bytes or does not encode canonical

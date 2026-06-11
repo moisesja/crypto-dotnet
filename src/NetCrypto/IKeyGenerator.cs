@@ -9,7 +9,11 @@ public interface IKeyGenerator
     /// <summary>Restore a key pair from an existing private key.</summary>
     KeyPair FromPrivateKey(KeyType keyType, ReadOnlySpan<byte> privateKey);
 
-    /// <summary>Create a public-only key reference from a public key.</summary>
+    /// <summary>
+    /// Create a public-only key reference from a public key in its canonical encoding
+    /// (compressed SEC1 point for EC key types). Implementations validate the length — and,
+    /// for EC types, curve membership — and throw <see cref="ArgumentException"/> on invalid input.
+    /// </summary>
     PublicKeyReference FromPublicKey(KeyType keyType, ReadOnlySpan<byte> publicKey);
 
     /// <summary>Derive an X25519 key agreement key from an Ed25519 key pair.</summary>

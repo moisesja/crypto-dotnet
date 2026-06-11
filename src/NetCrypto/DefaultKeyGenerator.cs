@@ -45,18 +45,42 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
     /// <inheritdoc />
     public PublicKeyReference FromPublicKey(KeyType keyType, ReadOnlySpan<byte> publicKey)
     {
+        var raw = publicKey.ToArray();
+
+        // The key model stores canonical encodings only (compressed SEC1 for EC types) — that is
+        // what Generate/FromPrivateKey produce and what MultibasePublicKey/JWK conversion assume.
+        // Rejecting other lengths here keeps a malformed reference from propagating into
+        // did:key/JWK output where it would encode garbage instead of failing.
+        if (!keyType.IsValidKeyLength(raw.Length))
+            throw new ArgumentException(
+                $"Invalid {keyType} public key length: {raw.Length} bytes. The key model stores " +
+                "the canonical encoding (compressed SEC1 point for EC types); convert an " +
+                "uncompressed EC point with KeyTypeExtensions.NormalizeToCompressed first.",
+                nameof(publicKey));
+
+        // Invalid-curve defense for the SEC1 types: a compressed x not on the curve must not
+        // become a PublicKeyReference handed to ECDH/verify paths. (No-op for non-EC types.)
+        if (!keyType.IsValidEcPoint(raw))
+            throw new ArgumentException(
+                $"Invalid {keyType} public key: not a valid point on the curve.", nameof(publicKey));
+
         return new PublicKeyReference
         {
             KeyType = keyType,
-            PublicKey = publicKey.ToArray()
+            PublicKey = raw
         };
     }
 
     /// <inheritdoc />
     public KeyPair DeriveX25519FromEd25519(KeyPair ed25519KeyPair)
     {
+        ArgumentNullException.ThrowIfNull(ed25519KeyPair);
         if (ed25519KeyPair.KeyType != KeyType.Ed25519)
             throw new ArgumentException("Key pair must be Ed25519.", nameof(ed25519KeyPair));
+        // Guard the length here (matching the public-only sibling below) so a wrong-sized seed
+        // raises ArgumentException rather than a raw NSec FormatException from Key.Import (NFR-3).
+        if (ed25519KeyPair.PrivateKey is not { Length: 32 })
+            throw new ArgumentException("Ed25519 private key must be 32 bytes.", nameof(ed25519KeyPair));
 
         // Use libsodium via NSec: import the Ed25519 key and derive X25519.
         // NSec Key.Import for Ed25519 expects the 32-byte seed.
@@ -108,6 +132,12 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
         // u = (1 + y) * modInverse(1 - y, p) mod p
         var numerator = (1 + y) % p;
         var denominator = (p + 1 - y) % p; // (1 - y) mod p, ensuring positive
+        // y == 1 makes the birational map (u = (1+y)/(1−y)) undefined (Montgomery point at
+        // infinity). ModInverse(0) would silently yield u = 0 — a degenerate, low-order X25519
+        // point — so reject it instead of emitting garbage from an invalid Ed25519 key.
+        if (denominator.IsZero)
+            throw new ArgumentException(
+                "Ed25519 public key does not map to a valid X25519 point (y = 1).", nameof(ed25519PublicKey));
         var u = numerator * ModInverse(denominator, p) % p;
         if (u < 0) u += p;
 

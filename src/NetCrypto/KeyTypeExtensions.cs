@@ -60,6 +60,8 @@ public static class KeyTypeExtensions
     /// </summary>
     public static byte[] NormalizeToCompressed(this KeyType keyType, byte[] publicKey)
     {
+        ArgumentNullException.ThrowIfNull(publicKey);
+
         switch (keyType)
         {
             case KeyType.P256 when publicKey.Length == 65 && publicKey[0] == 0x04:

@@ -21,6 +21,8 @@ public sealed class InMemoryKeyStore : IKeyStore
     /// <inheritdoc />
     public Task<StoredKeyInfo> GenerateAsync(string alias, KeyType keyType, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(alias);
+
         var keyPair = _keyGenerator.Generate(keyType);
         var info = new StoredKeyInfo
         {
@@ -38,6 +40,9 @@ public sealed class InMemoryKeyStore : IKeyStore
     /// <inheritdoc />
     public Task<StoredKeyInfo> ImportAsync(string alias, KeyPair keyPair, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(alias);
+        ArgumentNullException.ThrowIfNull(keyPair);
+
         var info = new StoredKeyInfo
         {
             Alias = alias,
@@ -54,6 +59,8 @@ public sealed class InMemoryKeyStore : IKeyStore
     /// <inheritdoc />
     public Task<StoredKeyInfo?> GetInfoAsync(string alias, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(alias);
+
         if (_keys.TryGetValue(alias, out var entry))
             return Task.FromResult<StoredKeyInfo?>(entry.Info);
 
@@ -63,6 +70,8 @@ public sealed class InMemoryKeyStore : IKeyStore
     /// <inheritdoc />
     public Task<byte[]> SignAsync(string alias, ReadOnlyMemory<byte> data, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(alias);
+
         if (!_keys.TryGetValue(alias, out var entry))
             throw new KeyNotFoundException($"Key alias '{alias}' not found.");
 
@@ -73,6 +82,8 @@ public sealed class InMemoryKeyStore : IKeyStore
     /// <inheritdoc />
     public Task<ISigner> CreateSignerAsync(string alias, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(alias);
+
         if (!_keys.TryGetValue(alias, out var entry))
             throw new KeyNotFoundException($"Key alias '{alias}' not found.");
 
@@ -90,6 +101,8 @@ public sealed class InMemoryKeyStore : IKeyStore
     /// <inheritdoc />
     public Task<bool> DeleteAsync(string alias, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrEmpty(alias);
+
         var removed = _keys.TryRemove(alias, out _);
         return Task.FromResult(removed);
     }

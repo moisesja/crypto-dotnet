@@ -51,7 +51,8 @@ public static class ConcatKdf
     /// <param name="suppPrivInfo">Supplemental private info. Almost always empty for JOSE. Passed through verbatim.</param>
     /// <param name="keyDataLen">Desired output length in bytes (e.g. 16 for A128KW, 32 for A256GCM).</param>
     /// <returns><paramref name="keyDataLen"/> bytes of derived keying material.</returns>
-    /// <exception cref="ArgumentOutOfRangeException">If <paramref name="keyDataLen"/> is non-positive.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">If <paramref name="keyDataLen"/> is non-positive
+    /// or exceeds the maximum supported length.</exception>
     public static byte[] DeriveKey(
         ReadOnlySpan<byte> sharedSecret,
         ReadOnlySpan<byte> algorithmId,
@@ -63,6 +64,11 @@ public static class ConcatKdf
     {
         if (keyDataLen <= 0)
             throw new ArgumentOutOfRangeException(nameof(keyDataLen), "Must be greater than zero.");
+        // SP 800-56A caps output at hashlen·(2³²−1); cap below int.MaxValue so the block-count
+        // and buffer-size arithmetic below cannot overflow into an OverflowException (NFR-3).
+        const int MaxKeyDataLen = int.MaxValue - Sha256OutputLen;
+        if (keyDataLen > MaxKeyDataLen)
+            throw new ArgumentOutOfRangeException(nameof(keyDataLen), $"Must not exceed {MaxKeyDataLen}.");
 
         // Spec: T_i = SHA-256(counter_i ‖ Z ‖ OtherInfo)
         // OtherInfo = lp(AlgorithmID) ‖ lp(PartyUInfo) ‖ lp(PartyVInfo) ‖ SuppPubInfo ‖ SuppPrivInfo

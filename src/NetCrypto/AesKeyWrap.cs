@@ -72,7 +72,7 @@ public static class AesKeyWrap
                 aes.EncryptEcb(block, encrypted, PaddingMode.None);
 
                 // A = MSB64(B) XOR t, where t = (n * j) + i + 1
-                var t = (ulong)(n * j) + (ulong)i + 1UL;
+                var t = (ulong)n * (ulong)j + (ulong)i + 1UL;
                 var aHigh = BinaryPrimitives.ReadUInt64BigEndian(encrypted[..BlockSize]) ^ t;
                 BinaryPrimitives.WriteUInt64BigEndian(a, aHigh);
 
@@ -123,7 +123,7 @@ public static class AesKeyWrap
             for (var i = n - 1; i >= 0; i--)
             {
                 // B = AES-1(K, (A XOR t) ‖ R[i]), t = (n * j) + i + 1
-                var t = (ulong)(n * j) + (ulong)i + 1UL;
+                var t = (ulong)n * (ulong)j + (ulong)i + 1UL;
                 var aHigh = BinaryPrimitives.ReadUInt64BigEndian(a) ^ t;
                 BinaryPrimitives.WriteUInt64BigEndian(block, aHigh);
                 r.AsSpan(i * BlockSize, BlockSize).CopyTo(block[BlockSize..]);

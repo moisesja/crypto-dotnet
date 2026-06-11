@@ -80,6 +80,22 @@ unsafe fn decode_indices(ptr: *const u8, total_len: usize) -> Option<Vec<usize>>
     Some(indices)
 }
 
+/// Run an FFI body, mapping both a logical error (`None`) and a panic to the `-1`
+/// error code, and success (`Some(())`) to `0`.
+///
+/// Catching the unwind here is mandatory for soundness: a panic from inside this
+/// crate or zkryptium (e.g. an `unwrap`, an out-of-bounds index, or a `usize`
+/// underflow on a malformed input) must NOT unwind across the `extern "C"`
+/// boundary into the .NET runtime — that is undefined behavior. `AssertUnwindSafe`
+/// is justified because a caught panic discards the (caller-owned) output buffer
+/// and returns an error; no observable invariant survives the failed call.
+fn ffi_call<F: FnOnce() -> Option<()>>(f: F) -> i32 {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(Some(())) => 0,
+        _ => -1,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Key generation
 // ---------------------------------------------------------------------------
@@ -102,7 +118,7 @@ pub unsafe extern "C" fn bbs_keygen(
     sk_out: *mut u8,
     pk_out: *mut u8,
 ) -> i32 {
-    let result = (|| -> Option<()> {
+    ffi_call(|| {
         if sk_out.is_null() || pk_out.is_null() {
             return None;
         }
@@ -117,8 +133,7 @@ pub unsafe extern "C" fn bbs_keygen(
             std::ptr::copy_nonoverlapping(pk_bytes.as_ptr(), pk_out, 96);
         }
         Some(())
-    })();
-    if result.is_some() { 0 } else { -1 }
+    })
 }
 
 /// Derive the public key from a secret key.
@@ -132,7 +147,7 @@ pub unsafe extern "C" fn bbs_sk_to_pk(
     sk_ptr: *const u8,
     pk_out: *mut u8,
 ) -> i32 {
-    let result = (|| -> Option<()> {
+    ffi_call(|| {
         if pk_out.is_null() {
             return None;
         }
@@ -144,8 +159,7 @@ pub unsafe extern "C" fn bbs_sk_to_pk(
             std::ptr::copy_nonoverlapping(pk_bytes.as_ptr(), pk_out, 96);
         }
         Some(())
-    })();
-    if result.is_some() { 0 } else { -1 }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -171,7 +185,7 @@ pub unsafe extern "C" fn bbs_sign(
     messages_len: usize,
     sig_out: *mut u8,
 ) -> i32 {
-    let result = (|| -> Option<()> {
+    ffi_call(|| {
         if sig_out.is_null() {
             return None;
         }
@@ -192,8 +206,7 @@ pub unsafe extern "C" fn bbs_sign(
             std::ptr::copy_nonoverlapping(sig_bytes.as_ptr(), sig_out, 80);
         }
         Some(())
-    })();
-    if result.is_some() { 0 } else { -1 }
+    })
 }
 
 /// Verify a BBS signature against the full set of messages.
@@ -208,7 +221,7 @@ pub unsafe extern "C" fn bbs_verify(
     messages_len: usize,
     sig_ptr: *const u8,
 ) -> i32 {
-    let result = (|| -> Option<()> {
+    ffi_call(|| {
         let pk_bytes = unsafe { as_slice(pk_ptr, 96)? };
         let header = unsafe { as_slice(header_ptr, header_len)? };
         let messages = unsafe { decode_messages(messages_ptr, messages_len)? };
@@ -223,8 +236,7 @@ pub unsafe extern "C" fn bbs_verify(
 
         sig.verify(&pk, msgs_opt, header_opt).ok()?;
         Some(())
-    })();
-    if result.is_some() { 0 } else { -1 }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +272,7 @@ pub unsafe extern "C" fn bbs_proof_gen(
     proof_out_cap: usize,
     proof_out_len: *mut usize,
 ) -> i32 {
-    let result = (|| -> Option<()> {
+    ffi_call(|| {
         if proof_out.is_null() || proof_out_len.is_null() {
             return None;
         }
@@ -292,8 +304,7 @@ pub unsafe extern "C" fn bbs_proof_gen(
             *proof_out_len = proof_bytes.len();
         }
         Some(())
-    })();
-    if result.is_some() { 0 } else { -1 }
+    })
 }
 
 /// Verify a selective-disclosure proof.
@@ -320,7 +331,7 @@ pub unsafe extern "C" fn bbs_proof_verify(
     indices_ptr: *const u8,
     indices_len: usize,
 ) -> i32 {
-    let result = (|| -> Option<()> {
+    ffi_call(|| {
         let pk_bytes = unsafe { as_slice(pk_ptr, 96)? };
         let proof_bytes = unsafe { as_slice(proof_ptr, proof_len)? };
         let header = unsafe { as_slice(header_ptr, header_len)? };
@@ -338,8 +349,7 @@ pub unsafe extern "C" fn bbs_proof_verify(
 
         proof.proof_verify(&pk, msgs_opt, idxs_opt, header_opt, ph_opt).ok()?;
         Some(())
-    })();
-    if result.is_some() { 0 } else { -1 }
+    })
 }
 
 #[cfg(test)]
@@ -420,7 +430,6 @@ mod tests {
         };
 
         let messages = encode_messages(&[b"msg1"]);
-        let header = b"";
         let mut sig = [0u8; 80];
         unsafe {
             bbs_sign(

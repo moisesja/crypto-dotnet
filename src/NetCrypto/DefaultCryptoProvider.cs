@@ -155,27 +155,33 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
         ReadOnlySpan<byte> signature, ECCurve curve, HashAlgorithmName hashAlgorithm, DSASignatureFormat format)
     {
         using var ecdsa = ECDsa.Create();
-        var parameters = ImportEcPublicKey(publicKey, curve);
-        ecdsa.ImportParameters(parameters);
-
-        // P1363 is fixed-width (R‖S, each padded to the field byte length), so a signature of the
-        // wrong length is definitively malformed. Reject it explicitly rather than depending on
-        // backend exception semantics (Windows CNG throws, OpenSSL returns false).
-        if (format == DSASignatureFormat.IeeeP1363FixedFieldConcatenation
-            && signature.Length != 2 * ((ecdsa.KeySize + 7) / 8))
-        {
-            return false;
-        }
 
         try
         {
+            // Import inside the try: an off-curve / out-of-range public key makes EcPointValidator
+            // throw CryptographicException, and an attacker-supplied key must surface as a
+            // verification failure (false), not a thrown exception, in a JWS/verify loop. (A
+            // wrong-length or malformed-format key still throws ArgumentException from
+            // ImportEcPublicKey — that is a caller bug per NFR-3, not a verification outcome.)
+            ecdsa.ImportParameters(ImportEcPublicKey(publicKey, curve));
+
+            // P1363 is fixed-width (R‖S, each padded to the field byte length), so a signature of
+            // the wrong length is definitively malformed. Reject it explicitly rather than
+            // depending on backend exception semantics (Windows CNG throws, OpenSSL returns false).
+            if (format == DSASignatureFormat.IeeeP1363FixedFieldConcatenation
+                && signature.Length != 2 * ((ecdsa.KeySize + 7) / 8))
+            {
+                return false;
+            }
+
             return ecdsa.VerifyData(data, signature, hashAlgorithm, format);
         }
         catch (CryptographicException)
         {
-            // A malformed signature is a verification failure, not an exception (JOSE convention —
-            // JWS verifiers expect false). Still needed for DER: Windows CNG throws on malformed
-            // ASN.1 where OpenSSL returns false. Catching normalizes both platforms to false.
+            // A malformed signature or off-curve key is a verification failure, not an exception
+            // (JOSE convention — JWS verifiers expect false). Still needed for DER: Windows CNG
+            // throws on malformed ASN.1 where OpenSSL returns false. Catching normalizes both
+            // platforms — and the off-curve-key path — to false.
             return false;
         }
     }

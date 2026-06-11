@@ -1,14 +1,16 @@
 using System.Security.Cryptography;
 using FluentAssertions;
+using Microsoft.IdentityModel.Tokens;
 using NetCrypto;
 
 namespace NetCrypto.Tests.NonFunctional;
 
 /// <summary>
-/// Regression tests for the confirmed findings of the adversarial review (2026-06-10).
-/// Each guards a specific NFR-3 / FR-5 defect that the review reproduced.
-/// The null-guard and length-guard tests need no native library (they fail fast before any
-/// crypto work), so they run on every CI leg; the BBS proof-size test requires the FFI.
+/// Regression tests for the confirmed findings of the adversarial reviews (2026-06-10 and the
+/// follow-up security review 2026-06-11). Each guards a specific NFR-3 / FR-5 / contract defect
+/// that a review reproduced. The null-guard and length-guard tests need no native library (they
+/// fail fast before any crypto work), so they run on every CI leg; tests that exercise the BBS
+/// FFI carry the NativeFFI trait.
 /// </summary>
 public class ReviewRegressionTests
 {
@@ -125,4 +127,289 @@ public class ReviewRegressionTests
         var act = () => JwkConverter.ToPublicJwk(keyType, badPoint);
         act.Should().Throw<ArgumentException>().WithParameterName("publicKey");
     }
+
+    // ════════════════════════ Security review — 2026-06-11 ════════════════════════
+
+    // ── ConcatKdf: an oversized keyDataLen formerly overflowed int → OverflowException ──
+
+    [Fact]
+    public void ConcatKdf_OversizedKeyDataLen_ThrowsArgumentOutOfRange_NotOverflow()
+    {
+        var act = () => ConcatKdf.DeriveKey(
+            new byte[32], default, default, default, default, default, int.MaxValue);
+        act.Should().Throw<ArgumentOutOfRangeException>().WithParameterName("keyDataLen");
+    }
+
+    // ── KeyTypeExtensions.NormalizeToCompressed(null) formerly threw NullReferenceException ──
+
+    [Fact]
+    public void NormalizeToCompressed_NullPublicKey_ThrowsArgumentNullException()
+    {
+        var act = () => KeyType.P256.NormalizeToCompressed(null!);
+        act.Should().Throw<ArgumentNullException>().WithParameterName("publicKey");
+    }
+
+    // ── JwkConverter.ExtractPublicKey formerly leaked a raw FormatException on bad base64url ──
+
+    [Fact]
+    public void ExtractPublicKey_MalformedBase64Url_ThrowsArgumentExceptionNotFormatException()
+    {
+        var okp = new JsonWebKey { Kty = "OKP", Crv = "Ed25519", X = "!!!not-base64!!!" };
+        ((Action)(() => JwkConverter.ExtractPublicKey(okp)))
+            .Should().Throw<ArgumentException>().WithParameterName("jwk");
+
+        var ec = new JsonWebKey { Kty = "EC", Crv = "P-256", X = "@@@bad@@@", Y = "AAAA" };
+        ((Action)(() => JwkConverter.ExtractPublicKey(ec)))
+            .Should().Throw<ArgumentException>().WithParameterName("jwk");
+    }
+
+    // ── JwkConverter.ExtractPublicKey formerly built a short SEC1 point from a left-trimmed X ──
+
+    [Fact]
+    public void ExtractPublicKey_LeftTrimmedEcCoordinate_PadsBackToFullWidth()
+    {
+        // Find a P-256 key whose X coordinate has a 0x00 most-significant byte; a base64url
+        // encoder that strips leading zeros would then emit a 31-byte X for it.
+        var kp = KeyGen.Generate(KeyType.P256);
+        for (var i = 0; i < 100_000 && kp.PublicKey[1] != 0x00; i++)
+            kp = KeyGen.Generate(KeyType.P256);
+        kp.PublicKey[1].Should().Be(0x00, "the test requires a leading-zero X coordinate");
+
+        var jwk = JwkConverter.ToPublicJwk(KeyType.P256, kp.PublicKey);
+        var xFull = Base64UrlDecode(jwk.X);   // 32 bytes, xFull[0] == 0x00
+        jwk.X = Base64UrlEncode(xFull[1..]);   // re-encode trimmed (31 bytes)
+
+        var (keyType, publicKey) = JwkConverter.ExtractPublicKey(jwk);
+
+        keyType.Should().Be(KeyType.P256);
+        publicKey.Length.Should().Be(33, "the SEC1 compressed point must be padded to full field width");
+        publicKey.Should().Equal(kp.PublicKey, "the padded point must round-trip to the original key");
+    }
+
+    // ── DefaultCryptoProvider.Verify formerly threw CryptographicException on an off-curve key ──
+
+    [Theory]
+    [InlineData(KeyType.P256, 32, 64)]   // 0x04 || 32-byte x || 32-byte y, P1363 sig = 64
+    [InlineData(KeyType.P384, 48, 96)]
+    public void Verify_OffCurvePublicKey_ReturnsFalseNotThrow(KeyType keyType, int coordLen, int sigLen)
+    {
+        // (x, y) = (2, 3) is not on any of these curves.
+        var pk = new byte[1 + 2 * coordLen];
+        pk[0] = 0x04;
+        pk[coordLen] = 2;          // last byte of x
+        pk[2 * coordLen] = 3;      // last byte of y
+        var data = new byte[] { 1, 2, 3 };
+        var sig = new byte[sigLen];
+
+        var act = () => Provider.Verify(keyType, pk, data, sig, EcdsaSignatureFormat.IeeeP1363);
+        act.Should().NotThrow("an off-curve public key is a verification failure, not an exception");
+        Provider.Verify(keyType, pk, data, sig, EcdsaSignatureFormat.IeeeP1363).Should().BeFalse();
+    }
+
+    // ── InMemoryKeyStore public methods formerly threw NRE / accepted null on bad arguments ──
+
+    [Fact]
+    public async Task InMemoryKeyStore_NullKeyPair_ThrowsArgumentNullException()
+    {
+        var store = new InMemoryKeyStore(KeyGen, Provider);
+        await ((Func<Task>)(() => store.ImportAsync("alias", null!)))
+            .Should().ThrowAsync<ArgumentNullException>().WithParameterName("keyPair");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task InMemoryKeyStore_NullOrEmptyAlias_ThrowsArgumentException(string? alias)
+    {
+        var store = new InMemoryKeyStore(KeyGen, Provider);
+        await ((Func<Task>)(() => store.GenerateAsync(alias!, KeyType.Ed25519)))
+            .Should().ThrowAsync<ArgumentException>().WithParameterName("alias");
+        await ((Func<Task>)(() => store.SignAsync(alias!, new byte[] { 1 })))
+            .Should().ThrowAsync<ArgumentException>().WithParameterName("alias");
+        await ((Func<Task>)(() => store.DeleteAsync(alias!)))
+            .Should().ThrowAsync<ArgumentException>().WithParameterName("alias");
+    }
+
+    // ── DeriveX25519FromEd25519 formerly threw a raw NSec FormatException on a wrong-length seed ──
+
+    [Fact]
+    public void DeriveX25519FromEd25519_WrongLengthPrivateKey_ThrowsArgumentException()
+    {
+        var bad = new KeyPair { KeyType = KeyType.Ed25519, PrivateKey = new byte[16], PublicKey = new byte[32] };
+        var act = () => KeyGen.DeriveX25519FromEd25519(bad);
+        act.Should().Throw<ArgumentException>().WithParameterName("ed25519KeyPair");
+    }
+
+    [Fact]
+    public void DeriveX25519FromEd25519_Null_ThrowsArgumentNullException()
+    {
+        var act = () => KeyGen.DeriveX25519FromEd25519(null!);
+        act.Should().Throw<ArgumentNullException>().WithParameterName("ed25519KeyPair");
+    }
+
+    // ── DeriveX25519PublicKeyFromEd25519 formerly returned a degenerate u=0 for the y=1 map ──
+
+    [Fact]
+    public void DeriveX25519PublicKeyFromEd25519_DegenerateY1_ThrowsArgumentException()
+    {
+        var pk = new byte[32];
+        pk[0] = 1; // y = 1 (little-endian) → (1 - y) = 0 → birational map undefined
+        var act = () => KeyGen.DeriveX25519PublicKeyFromEd25519(pk);
+        act.Should().Throw<ArgumentException>().WithParameterName("ed25519PublicKey");
+    }
+
+    // ── DeriveProof formerly passed an out-of-range index straight to the FFI (opaque error) ──
+
+    [Theory]
+    [Trait("Category", "NativeFFI")]
+    [InlineData(-1)]
+    [InlineData(3)]    // == message count
+    [InlineData(99)]
+    public void BbsDeriveProof_RevealedIndexOutOfRange_ThrowsArgumentOutOfRange(int badIndex)
+    {
+        var bbs = new DefaultBbsCryptoProvider();
+        var keyPair = KeyGen.Generate(KeyType.Bls12381G2);
+        List<byte[]> messages = [[1], [2], [3]]; // count = 3
+        var signature = bbs.Sign(keyPair.PrivateKey, messages);
+
+        var act = () => bbs.DeriveProof(keyPair.PublicKey, signature, messages, [badIndex], default);
+        act.Should().Throw<ArgumentOutOfRangeException>().WithParameterName("revealedIndices");
+    }
+
+    // ── DeriveProof formerly forwarded duplicate indices to the FFI (draft-10 requires distinct) ──
+
+    [Fact]
+    [Trait("Category", "NativeFFI")]
+    public void BbsDeriveProof_DuplicateRevealedIndex_ThrowsArgumentException()
+    {
+        var bbs = new DefaultBbsCryptoProvider();
+        List<byte[]> messages = [[1], [2], [3]];
+
+        // Validation fires before any FFI call, so dummy key/signature bytes suffice.
+        var act = () => bbs.DeriveProof(new byte[96], new byte[80], messages, [0, 2, 0], default);
+        act.Should().Throw<ArgumentException>().WithParameterName("revealedIndices")
+            .WithMessage("*duplicated*");
+    }
+
+    // ════════════════ Security review — design changes (maintainer-approved) ════════════════
+
+    // ── Key model formerly exposed its internal byte[] by reference (caller could mutate) ──
+
+    [Fact]
+    public void KeyPair_KeyMaterial_IsDefensivelyCopied()
+    {
+        var source = KeyGen.Generate(KeyType.Ed25519);
+        var publicKey = source.PublicKey;
+        var privateKey = source.PrivateKey;
+        var kp = new KeyPair { KeyType = KeyType.Ed25519, PublicKey = publicKey, PrivateKey = privateKey };
+        var multibaseBefore = kp.MultibasePublicKey;
+        var privateBefore = (byte[])privateKey.Clone();
+
+        publicKey[0] ^= 0xFF;          // mutate the arrays used to initialize
+        privateKey[0] ^= 0xFF;
+        kp.PublicKey[0] ^= 0xFF;       // mutate the arrays returned by the getters
+        kp.PrivateKey[0] ^= 0xFF;
+
+        kp.MultibasePublicKey.Should().Be(multibaseBefore,
+            "mutating input or returned arrays must never alter the key pair's state");
+        kp.PrivateKey.Should().Equal(privateBefore);
+    }
+
+    [Fact]
+    public void StoredKeyInfo_PublicKey_IsDefensivelyCopied()
+    {
+        var info = new StoredKeyInfo { Alias = "a", KeyType = KeyType.Ed25519, PublicKey = new byte[32] };
+        var multibaseBefore = info.MultibasePublicKey;
+
+        info.PublicKey[0] = 0xFF;
+
+        info.MultibasePublicKey.Should().Be(multibaseBefore);
+    }
+
+    [Fact]
+    public void KeyModel_NullKeyMaterial_ThrowsArgumentNullException()
+    {
+        ((Action)(() => _ = new KeyPair { KeyType = KeyType.Ed25519, PublicKey = null!, PrivateKey = new byte[32] }))
+            .Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new PublicKeyReference { KeyType = KeyType.Ed25519, PublicKey = null! }))
+            .Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new StoredKeyInfo { Alias = "a", KeyType = KeyType.Ed25519, PublicKey = null! }))
+            .Should().Throw<ArgumentNullException>();
+    }
+
+    // ── StoredKeyInfo record equality formerly compared the PublicKey array by reference ──
+
+    [Fact]
+    public void StoredKeyInfo_ValueIdenticalInstances_AreEqual()
+    {
+        var a = new StoredKeyInfo { Alias = "k", KeyType = KeyType.P256, PublicKey = [1, 2, 3] };
+        var b = new StoredKeyInfo { Alias = "k", KeyType = KeyType.P256, PublicKey = [1, 2, 3] };
+
+        a.Should().Be(b);
+        a.GetHashCode().Should().Be(b.GetHashCode());
+        new HashSet<StoredKeyInfo> { a, b }.Should().HaveCount(1, "value-identical infos must dedup");
+
+        var differentKey = new StoredKeyInfo { Alias = "k", KeyType = KeyType.P256, PublicKey = [9, 2, 3] };
+        var differentAlias = new StoredKeyInfo { Alias = "x", KeyType = KeyType.P256, PublicKey = [1, 2, 3] };
+        a.Should().NotBe(differentKey);
+        a.Should().NotBe(differentAlias);
+    }
+
+    // ── FromPublicKey formerly accepted any bytes (garbage propagated into multibase/JWK) ──
+
+    [Theory]
+    [InlineData(KeyType.Ed25519, 31)]
+    [InlineData(KeyType.Ed25519, 33)]
+    [InlineData(KeyType.P256, 32)]     // missing SEC1 prefix byte
+    [InlineData(KeyType.Secp256k1, 0)]
+    [InlineData(KeyType.Bls12381G2, 48)] // G1 length given for a G2 key
+    public void FromPublicKey_WrongLength_ThrowsArgumentException(KeyType keyType, int length)
+    {
+        var act = () => KeyGen.FromPublicKey(keyType, new byte[length]);
+        act.Should().Throw<ArgumentException>().WithParameterName("publicKey");
+    }
+
+    [Fact]
+    public void FromPublicKey_OffCurveCompressedPoint_ThrowsArgumentException()
+    {
+        // x = 1 on P-256: x³ − 3x + b is a quadratic non-residue, so no point exists.
+        var offCurve = new byte[33];
+        offCurve[0] = 0x02;
+        offCurve[32] = 0x01;
+
+        var act = () => KeyGen.FromPublicKey(KeyType.P256, offCurve);
+        act.Should().Throw<ArgumentException>().WithParameterName("publicKey");
+    }
+
+    [Fact]
+    public void FromPublicKey_UncompressedPoint_RejectedUntilNormalized()
+    {
+        // The model stores canonical compressed SEC1 points; an uncompressed (0x04) point must
+        // be normalized first. Build a genuine uncompressed point from the JWK coordinates.
+        var kp = KeyGen.Generate(KeyType.P256);
+        var jwk = JwkConverter.ToPublicJwk(KeyType.P256, kp.PublicKey);
+        var x = Base64UrlDecode(jwk.X);
+        var y = Base64UrlDecode(jwk.Y);
+        var uncompressed = new byte[65];
+        uncompressed[0] = 0x04;
+        x.CopyTo(uncompressed, 1 + (32 - x.Length));
+        y.CopyTo(uncompressed, 33 + (32 - y.Length));
+
+        ((Action)(() => KeyGen.FromPublicKey(KeyType.P256, uncompressed)))
+            .Should().Throw<ArgumentException>().WithParameterName("publicKey");
+
+        var normalized = KeyType.P256.NormalizeToCompressed(uncompressed);
+        KeyGen.FromPublicKey(KeyType.P256, normalized).PublicKey.Should().Equal(kp.PublicKey,
+            "NormalizeToCompressed then FromPublicKey must round-trip to the canonical encoding");
+    }
+
+    private static byte[] Base64UrlDecode(string s)
+    {
+        s = s.Replace('-', '+').Replace('_', '/');
+        s += (s.Length % 4) switch { 2 => "==", 3 => "=", _ => "" };
+        return Convert.FromBase64String(s);
+    }
+
+    private static string Base64UrlEncode(byte[] b) =>
+        Convert.ToBase64String(b).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 }
