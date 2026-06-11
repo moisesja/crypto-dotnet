@@ -30,6 +30,12 @@ public sealed class KeyPair
     /// The raw private key bytes. Defensively copied on both set and get: mutating the returned
     /// array (or the array used to initialize the property) never alters this key pair.
     /// </summary>
+    /// <remarks>
+    /// Each access returns a fresh copy of the secret, so every read leaves another unzeroed
+    /// array on the managed heap until collected. Callers handling long-lived secrets should
+    /// read once, reuse the array, and clear it with
+    /// <see cref="System.Security.Cryptography.CryptographicOperations.ZeroMemory"/> when done.
+    /// </remarks>
     public required byte[] PrivateKey
     {
         get => (byte[])_privateKey.Clone();

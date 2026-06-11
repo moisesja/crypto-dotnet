@@ -160,14 +160,21 @@ public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
             throw new ArgumentException($"BBS+ signature must be {SignatureSize} bytes.", nameof(signature));
         if (revealedIndices.Count == 0)
             throw new ArgumentException("At least one revealed index is required.", nameof(revealedIndices));
-        // Validate index range on the managed side so an out-of-range or negative index raises a
-        // clear ArgumentOutOfRangeException rather than being cast to a huge uint at the FFI
-        // boundary and surfacing as an opaque CryptographicException (NFR-3); it also keeps a bad
-        // index from depending on a third-party bounds check inside the native library.
+        // Validate indices on the managed side so a bad index raises a clear argument exception
+        // rather than being cast to a huge uint at the FFI boundary and surfacing as an opaque
+        // CryptographicException (NFR-3); it also keeps invalid indices from depending on
+        // third-party checks inside the native library. Draft-10 proof_gen requires the
+        // disclosed indexes to be distinct, so duplicates are rejected rather than forwarded.
+        var seen = new bool[messages.Count];
         foreach (var index in revealedIndices)
+        {
             if (index < 0 || index >= messages.Count)
                 throw new ArgumentOutOfRangeException(nameof(revealedIndices),
                     $"Revealed index {index} is out of range for {messages.Count} message(s).");
+            if (seen[index])
+                throw new ArgumentException($"Revealed index {index} is duplicated.", nameof(revealedIndices));
+            seen[index] = true;
+        }
 
         var encodedMessages = ZkryptiumNative.EncodeMessages(messages);
         var encodedIndices = ZkryptiumNative.EncodeIndices(revealedIndices);

@@ -276,6 +276,21 @@ public class ReviewRegressionTests
         act.Should().Throw<ArgumentOutOfRangeException>().WithParameterName("revealedIndices");
     }
 
+    // ── DeriveProof formerly forwarded duplicate indices to the FFI (draft-10 requires distinct) ──
+
+    [Fact]
+    [Trait("Category", "NativeFFI")]
+    public void BbsDeriveProof_DuplicateRevealedIndex_ThrowsArgumentException()
+    {
+        var bbs = new DefaultBbsCryptoProvider();
+        List<byte[]> messages = [[1], [2], [3]];
+
+        // Validation fires before any FFI call, so dummy key/signature bytes suffice.
+        var act = () => bbs.DeriveProof(new byte[96], new byte[80], messages, [0, 2, 0], default);
+        act.Should().Throw<ArgumentException>().WithParameterName("revealedIndices")
+            .WithMessage("*duplicated*");
+    }
+
     // ════════════════ Security review — design changes (maintainer-approved) ════════════════
 
     // ── Key model formerly exposed its internal byte[] by reference (caller could mutate) ──
