@@ -197,7 +197,19 @@ jobs:
           mkdir smoke && cd smoke
           dotnet new console --framework net10.0
           cp ../.github/smoke/Program.cs Program.cs
-          dotnet add package NetCrypto --version "${VERSION}" --source ../localfeed
+          # Give the smoke project its own restore config: the packed NetCrypto comes from
+          # the local feed, its NetCid dependency from nuget.org. A local nuget.config makes
+          # this independent of the repo-root config (which has <clear/>) and the package cache.
+          # printf avoids heredoc indentation prepending whitespace to the XML.
+          printf '%s\n' \
+            '<configuration>' \
+            '  <packageSources>' \
+            '    <clear />' \
+            '    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />' \
+            '    <add key="localfeed" value="../localfeed" />' \
+            '  </packageSources>' \
+            '</configuration>' > nuget.config
+          dotnet add package NetCrypto --version "${VERSION}"
           dotnet run --configuration Release
 
   publish:
