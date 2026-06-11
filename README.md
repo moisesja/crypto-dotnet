@@ -10,8 +10,11 @@ stable interfaces, so that no domain library (`net-did`, `dataproofs-dotnet`,
 `credentials-dotnet`, `didcomm-dotnet`) binds directly to a specific crypto backend.
 
 ```
-dotnet add package NetCrypto
+dotnet add package NetCrypto --prerelease
 ```
+
+> NetCrypto is currently published as a **preview** (`1.0.0-preview.*`); the `--prerelease`
+> flag (or an explicit prerelease version) is required until a stable `1.0.0` is cut.
 
 Target framework: **net10.0**. Depends on [`NetCid`](https://www.nuget.org/packages/NetCid)
 for multibase/multicodec encoding.
