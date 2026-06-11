@@ -45,10 +45,29 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
     /// <inheritdoc />
     public PublicKeyReference FromPublicKey(KeyType keyType, ReadOnlySpan<byte> publicKey)
     {
+        var raw = publicKey.ToArray();
+
+        // The key model stores canonical encodings only (compressed SEC1 for EC types) — that is
+        // what Generate/FromPrivateKey produce and what MultibasePublicKey/JWK conversion assume.
+        // Rejecting other lengths here keeps a malformed reference from propagating into
+        // did:key/JWK output where it would encode garbage instead of failing.
+        if (!keyType.IsValidKeyLength(raw.Length))
+            throw new ArgumentException(
+                $"Invalid {keyType} public key length: {raw.Length} bytes. The key model stores " +
+                "the canonical encoding (compressed SEC1 point for EC types); convert an " +
+                "uncompressed EC point with KeyTypeExtensions.NormalizeToCompressed first.",
+                nameof(publicKey));
+
+        // Invalid-curve defense for the SEC1 types: a compressed x not on the curve must not
+        // become a PublicKeyReference handed to ECDH/verify paths. (No-op for non-EC types.)
+        if (!keyType.IsValidEcPoint(raw))
+            throw new ArgumentException(
+                $"Invalid {keyType} public key: not a valid point on the curve.", nameof(publicKey));
+
         return new PublicKeyReference
         {
             KeyType = keyType,
-            PublicKey = publicKey.ToArray()
+            PublicKey = raw
         };
     }
 

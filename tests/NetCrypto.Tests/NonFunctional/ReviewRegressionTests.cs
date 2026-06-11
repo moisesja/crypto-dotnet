@@ -276,6 +276,118 @@ public class ReviewRegressionTests
         act.Should().Throw<ArgumentOutOfRangeException>().WithParameterName("revealedIndices");
     }
 
+    // ════════════════ Security review — design changes (maintainer-approved) ════════════════
+
+    // ── Key model formerly exposed its internal byte[] by reference (caller could mutate) ──
+
+    [Fact]
+    public void KeyPair_KeyMaterial_IsDefensivelyCopied()
+    {
+        var source = KeyGen.Generate(KeyType.Ed25519);
+        var publicKey = source.PublicKey;
+        var privateKey = source.PrivateKey;
+        var kp = new KeyPair { KeyType = KeyType.Ed25519, PublicKey = publicKey, PrivateKey = privateKey };
+        var multibaseBefore = kp.MultibasePublicKey;
+        var privateBefore = (byte[])privateKey.Clone();
+
+        publicKey[0] ^= 0xFF;          // mutate the arrays used to initialize
+        privateKey[0] ^= 0xFF;
+        kp.PublicKey[0] ^= 0xFF;       // mutate the arrays returned by the getters
+        kp.PrivateKey[0] ^= 0xFF;
+
+        kp.MultibasePublicKey.Should().Be(multibaseBefore,
+            "mutating input or returned arrays must never alter the key pair's state");
+        kp.PrivateKey.Should().Equal(privateBefore);
+    }
+
+    [Fact]
+    public void StoredKeyInfo_PublicKey_IsDefensivelyCopied()
+    {
+        var info = new StoredKeyInfo { Alias = "a", KeyType = KeyType.Ed25519, PublicKey = new byte[32] };
+        var multibaseBefore = info.MultibasePublicKey;
+
+        info.PublicKey[0] = 0xFF;
+
+        info.MultibasePublicKey.Should().Be(multibaseBefore);
+    }
+
+    [Fact]
+    public void KeyModel_NullKeyMaterial_ThrowsArgumentNullException()
+    {
+        ((Action)(() => _ = new KeyPair { KeyType = KeyType.Ed25519, PublicKey = null!, PrivateKey = new byte[32] }))
+            .Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new PublicKeyReference { KeyType = KeyType.Ed25519, PublicKey = null! }))
+            .Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new StoredKeyInfo { Alias = "a", KeyType = KeyType.Ed25519, PublicKey = null! }))
+            .Should().Throw<ArgumentNullException>();
+    }
+
+    // ── StoredKeyInfo record equality formerly compared the PublicKey array by reference ──
+
+    [Fact]
+    public void StoredKeyInfo_ValueIdenticalInstances_AreEqual()
+    {
+        var a = new StoredKeyInfo { Alias = "k", KeyType = KeyType.P256, PublicKey = [1, 2, 3] };
+        var b = new StoredKeyInfo { Alias = "k", KeyType = KeyType.P256, PublicKey = [1, 2, 3] };
+
+        a.Should().Be(b);
+        a.GetHashCode().Should().Be(b.GetHashCode());
+        new HashSet<StoredKeyInfo> { a, b }.Should().HaveCount(1, "value-identical infos must dedup");
+
+        var differentKey = new StoredKeyInfo { Alias = "k", KeyType = KeyType.P256, PublicKey = [9, 2, 3] };
+        var differentAlias = new StoredKeyInfo { Alias = "x", KeyType = KeyType.P256, PublicKey = [1, 2, 3] };
+        a.Should().NotBe(differentKey);
+        a.Should().NotBe(differentAlias);
+    }
+
+    // ── FromPublicKey formerly accepted any bytes (garbage propagated into multibase/JWK) ──
+
+    [Theory]
+    [InlineData(KeyType.Ed25519, 31)]
+    [InlineData(KeyType.Ed25519, 33)]
+    [InlineData(KeyType.P256, 32)]     // missing SEC1 prefix byte
+    [InlineData(KeyType.Secp256k1, 0)]
+    [InlineData(KeyType.Bls12381G2, 48)] // G1 length given for a G2 key
+    public void FromPublicKey_WrongLength_ThrowsArgumentException(KeyType keyType, int length)
+    {
+        var act = () => KeyGen.FromPublicKey(keyType, new byte[length]);
+        act.Should().Throw<ArgumentException>().WithParameterName("publicKey");
+    }
+
+    [Fact]
+    public void FromPublicKey_OffCurveCompressedPoint_ThrowsArgumentException()
+    {
+        // x = 1 on P-256: x³ − 3x + b is a quadratic non-residue, so no point exists.
+        var offCurve = new byte[33];
+        offCurve[0] = 0x02;
+        offCurve[32] = 0x01;
+
+        var act = () => KeyGen.FromPublicKey(KeyType.P256, offCurve);
+        act.Should().Throw<ArgumentException>().WithParameterName("publicKey");
+    }
+
+    [Fact]
+    public void FromPublicKey_UncompressedPoint_RejectedUntilNormalized()
+    {
+        // The model stores canonical compressed SEC1 points; an uncompressed (0x04) point must
+        // be normalized first. Build a genuine uncompressed point from the JWK coordinates.
+        var kp = KeyGen.Generate(KeyType.P256);
+        var jwk = JwkConverter.ToPublicJwk(KeyType.P256, kp.PublicKey);
+        var x = Base64UrlDecode(jwk.X);
+        var y = Base64UrlDecode(jwk.Y);
+        var uncompressed = new byte[65];
+        uncompressed[0] = 0x04;
+        x.CopyTo(uncompressed, 1 + (32 - x.Length));
+        y.CopyTo(uncompressed, 33 + (32 - y.Length));
+
+        ((Action)(() => KeyGen.FromPublicKey(KeyType.P256, uncompressed)))
+            .Should().Throw<ArgumentException>().WithParameterName("publicKey");
+
+        var normalized = KeyType.P256.NormalizeToCompressed(uncompressed);
+        KeyGen.FromPublicKey(KeyType.P256, normalized).PublicKey.Should().Equal(kp.PublicKey,
+            "NormalizeToCompressed then FromPublicKey must round-trip to the canonical encoding");
+    }
+
     private static byte[] Base64UrlDecode(string s)
     {
         s = s.Replace('-', '+').Replace('_', '/');

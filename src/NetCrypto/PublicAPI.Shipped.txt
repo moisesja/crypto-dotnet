@@ -126,12 +126,14 @@ NetCrypto.ServiceCollectionExtensions
 NetCrypto.StoredKeyInfo
 NetCrypto.StoredKeyInfo.Alias.get -> string!
 NetCrypto.StoredKeyInfo.Alias.init -> void
+NetCrypto.StoredKeyInfo.Equals(NetCrypto.StoredKeyInfo? other) -> bool
 NetCrypto.StoredKeyInfo.KeyType.get -> NetCrypto.KeyType
 NetCrypto.StoredKeyInfo.KeyType.init -> void
 NetCrypto.StoredKeyInfo.MultibasePublicKey.get -> string!
 NetCrypto.StoredKeyInfo.PublicKey.get -> byte[]!
 NetCrypto.StoredKeyInfo.PublicKey.init -> void
 NetCrypto.XChaCha20Poly1305Cipher
+override NetCrypto.StoredKeyInfo.GetHashCode() -> int
 static NetCrypto.AesCbcHmacCipher.Decrypt(System.ReadOnlySpan<byte> key, System.ReadOnlySpan<byte> iv, System.ReadOnlySpan<byte> ciphertext, System.ReadOnlySpan<byte> tag, System.ReadOnlySpan<byte> associatedData = default(System.ReadOnlySpan<byte>)) -> byte[]!
 static NetCrypto.AesCbcHmacCipher.Encrypt(System.ReadOnlySpan<byte> key, System.ReadOnlySpan<byte> iv, System.ReadOnlySpan<byte> plaintext, System.ReadOnlySpan<byte> associatedData = default(System.ReadOnlySpan<byte>)) -> (byte[]! Ciphertext, byte[]! Tag)
 static NetCrypto.AesGcmCipher.Decrypt(System.ReadOnlySpan<byte> key, System.ReadOnlySpan<byte> nonce, System.ReadOnlySpan<byte> ciphertext, System.ReadOnlySpan<byte> tag, System.ReadOnlySpan<byte> associatedData = default(System.ReadOnlySpan<byte>)) -> byte[]!

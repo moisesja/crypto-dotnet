@@ -65,7 +65,11 @@ Console.WriteLine("=== 3. PublicKeyReference — FromPublicKey (no private mater
 
 // A verifier only ever receives public bytes. FromPublicKey wraps them in
 // a PublicKeyReference, a type that *cannot* carry a private key, so the
-// compiler enforces the holder/verifier separation.
+// compiler enforces the holder/verifier separation. The bytes must be the
+// canonical encoding (compressed SEC1 point for EC types) and are validated —
+// wrong lengths or off-curve points throw ArgumentException instead of
+// propagating garbage into multibase/JWK output. Uncompressed EC points can
+// be converted first with KeyTypeExtensions.NormalizeToCompressed.
 var reference = keyGenerator.FromPublicKey(KeyType.Ed25519, ed25519.PublicKey);
 
 Console.WriteLine($"  KeyType:            {reference.KeyType}");
