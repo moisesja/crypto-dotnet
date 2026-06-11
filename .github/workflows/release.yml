@@ -221,9 +221,9 @@ jobs:
     name: publish (NuGet + release assets)
     needs: [pack, smoke]
     runs-on: ubuntu-latest
-    # The only job that writes to the repo (creates the GitHub release).
     permissions:
-      contents: write
+      contents: write   # create the GitHub release
+      id-token: write   # request the GitHub OIDC token for NuGet Trusted Publishing
     steps:
       - uses: actions/checkout@v4
 
@@ -244,9 +244,19 @@ jobs:
             artifacts/SHA256SUMS.txt artifacts/*.nupkg artifacts/*.snupkg \
             --title "NetCrypto ${GITHUB_REF_NAME}" --generate-notes
 
+      # NuGet Trusted Publishing (OIDC): exchange the GitHub OIDC token for a short-lived
+      # (1-hour) NuGet API key — no long-lived secret stored in the repo. Requires a Trusted
+      # Publishing policy on nuget.org for owner=moisesja, repo=crypto-dotnet, workflow=release.yml.
+      # Run this immediately before the push so the temporary key does not expire.
+      - name: NuGet login (OIDC → short-lived API key)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: moisesja   # nuget.org account/profile name (public package owner), not an email
+
       - name: Push to NuGet (gated on all prior jobs)
         run: |
           dotnet nuget push artifacts/*.nupkg \
-            --api-key "${{ secrets.NUGET_API_KEY }}" \
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
