@@ -43,12 +43,12 @@ public class InputValidationFuzzTests
     /// <item><description><c>Nethermind.Crypto.Bls+BlsException</c> (base
     /// <see cref="ApplicationException"/>): thrown for wrong-length BLS12-381 scalar
     /// encodings.</description></item>
-    /// <item><description><c>System.IndexOutOfRangeException</c>: GENUINE CRASH BUG —
-    /// NBitcoin.Secp256k1's ECPrivKey.Create indexes into the input span assuming at least
-    /// 32 bytes, so empty/1-byte secp256k1 private keys crash, directly violating the NFR-3
-    /// acceptance criterion ("no public method can be made to throw
-    /// IndexOutOfRangeException... from bad input").</description></item>
     /// </list>
+    /// The secp256k1 paths formerly crashed with <c>IndexOutOfRangeException</c> on sub-32-byte
+    /// keys (NBitcoin's <c>ECPrivKey.Create</c> indexes a 32-byte span). That was a genuine NFR-3
+    /// violation and is now fixed with an up-front length guard in
+    /// <c>DefaultCryptoProvider.SignSecp256k1</c> and <c>DefaultKeyGenerator.RestoreSecp256k1</c>,
+    /// so secp256k1 carries no pinned deviation.
     /// </summary>
     private static readonly IReadOnlyDictionary<(string Member, KeyType KeyType), string[]> KnownBackendDeviations =
         new Dictionary<(string, KeyType), string[]>
@@ -67,10 +67,8 @@ public class InputValidationFuzzTests
             [("FromPrivateKey", KeyType.Bls12381G1)] = ["Nethermind.Crypto.Bls+BlsException"],
             [("FromPrivateKey", KeyType.Bls12381G2)] = ["Nethermind.Crypto.Bls+BlsException"],
 
-            // CRASH BUG (see XML doc above): private keys shorter than 32 bytes crash inside
-            // NBitcoin.Secp256k1; oversized inputs throw ArgumentException as expected.
-            [("Sign", KeyType.Secp256k1)] = ["System.IndexOutOfRangeException"],
-            [("FromPrivateKey", KeyType.Secp256k1)] = ["System.IndexOutOfRangeException"],
+            // secp256k1: now guarded — Sign/FromPrivateKey throw ArgumentException for any
+            // non-32-byte key (no pinned deviation; enforced by the contract assertion below).
         };
 
     /// <summary>All key types crossed with all fuzz input sizes.</summary>

@@ -261,7 +261,12 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
 
     private static KeyPair RestoreSecp256k1(ReadOnlySpan<byte> privateKey)
     {
-        var privKey = ECPrivKey.Create(privateKey);
+        // Validate length before handing to NBitcoin, whose ctor indexes a 32-byte span
+        // and would otherwise throw IndexOutOfRangeException on bad input (NFR-3).
+        if (privateKey.Length != 32)
+            throw new ArgumentException("secp256k1 private key must be 32 bytes.", nameof(privateKey));
+        if (!ECPrivKey.TryCreate(privateKey, out var privKey) || privKey is null)
+            throw new ArgumentException("Invalid secp256k1 private key.", nameof(privateKey));
         var pubKey = privKey.CreatePubKey();
 
         var publicKeyBytes = new byte[33];

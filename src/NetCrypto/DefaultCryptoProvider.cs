@@ -304,7 +304,12 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
 
     private static byte[] SignSecp256k1(ReadOnlySpan<byte> privateKey, ReadOnlySpan<byte> data)
     {
-        var privKey = ECPrivKey.Create(privateKey);
+        // Validate length before handing to NBitcoin, whose ctor indexes a 32-byte span
+        // and would otherwise throw IndexOutOfRangeException on bad input (NFR-3).
+        if (privateKey.Length != 32)
+            throw new ArgumentException("secp256k1 private key must be 32 bytes.", nameof(privateKey));
+        if (!ECPrivKey.TryCreate(privateKey, out var privKey) || privKey is null)
+            throw new ArgumentException("Invalid secp256k1 private key.", nameof(privateKey));
 
         // secp256k1 ECDSA expects a 32-byte message hash
         Span<byte> hash = stackalloc byte[32];

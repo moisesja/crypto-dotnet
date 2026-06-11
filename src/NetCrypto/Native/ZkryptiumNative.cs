@@ -99,8 +99,13 @@ internal static partial class ZkryptiumNative
     internal static byte[] EncodeMessages(IReadOnlyList<byte[]> messages)
     {
         var totalSize = 4; // count
-        foreach (var msg in messages)
+        for (var i = 0; i < messages.Count; i++)
+        {
+            var msg = messages[i];
+            if (msg is null)
+                throw new ArgumentException($"Message at index {i} is null.", nameof(messages));
             totalSize += 4 + msg.Length;
+        }
 
         var buf = new byte[totalSize];
         var offset = 0;

@@ -117,23 +117,46 @@ public static class JwkConverter
 
     private static JsonWebKey CreateEcJwk(string crv, byte[] publicKey)
     {
+        // Fixed coordinate size per curve — reject wrong-length points up front so we never
+        // emit a JWK with truncated or fabricated coordinates (NFR-3; mirrors the validation
+        // the consuming ExtractPublicKey path already performs).
+        var coordLen = crv switch
+        {
+            "P-256" or "secp256k1" => 32,
+            "P-384" => 48,
+            "P-521" => 66,
+            _ => throw new ArgumentException($"Unsupported curve: {crv}", nameof(crv))
+        };
+
         byte[] x, y;
 
-        if (publicKey.Length > 0 && (publicKey[0] == 0x02 || publicKey[0] == 0x03))
+        if (publicKey.Length == 1 + coordLen && (publicKey[0] == 0x02 || publicKey[0] == 0x03))
         {
             // Compressed SEC1 point — decompress to get x, y coordinates
             (x, y) = DecompressToCoordinates(crv, publicKey);
         }
-        else if (publicKey.Length > 0 && publicKey[0] == 0x04)
+        else if (publicKey.Length == 1 + 2 * coordLen && publicKey[0] == 0x04)
         {
             // Uncompressed: 0x04 || x || y
-            var coordLen = (publicKey.Length - 1) / 2;
             x = publicKey[1..(1 + coordLen)];
             y = publicKey[(1 + coordLen)..];
+            // Defense in depth: ensure the supplied point is actually on the curve before
+            // emitting it (the compressed branch derives y from the curve, so it is implied there).
+            var keyType = crv switch
+            {
+                "P-256" => KeyType.P256,
+                "P-384" => KeyType.P384,
+                "P-521" => KeyType.P521,
+                _ => KeyType.Secp256k1
+            };
+            EcPointValidator.EnsureOnCurve(keyType, x, y);
         }
         else
         {
-            throw new ArgumentException("Invalid EC public key format. Expected compressed (0x02/0x03) or uncompressed (0x04) SEC1 point.");
+            throw new ArgumentException(
+                $"Invalid EC public key for {crv}: expected {1 + coordLen}-byte compressed (0x02/0x03) " +
+                $"or {1 + 2 * coordLen}-byte uncompressed (0x04) SEC1 point, got {publicKey.Length} bytes.",
+                nameof(publicKey));
         }
 
         return new JsonWebKey

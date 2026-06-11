@@ -13,11 +13,15 @@ public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
     private const int PublicKeySize = 96;
     private const int SignatureSize = 80;
 
-    // BLS12-381-SHA-256 proof size formula (IETF draft-10):
-    //   proof_len = 3 * point_len + scalar_len * (undisclosed + 1)
-    //   where point_len = 48, scalar_len = 32
+    // BLS12-381-SHA-256 proof size (IETF draft-10):
+    //   proof_len = 3 * point_len + scalar_len * (undisclosed + 4)
+    //   where point_len = 48, scalar_len = 32 (i.e. 272 + 32*undisclosed bytes).
+    // We allocate the buffer generously off the total message count (always >= the
+    // exact size for any reveal pattern) so the call is robust to draft/library drift;
+    // the FFI writes the true length back via its out_len parameter.
     private const int ProofPointOverhead = 3 * 48;   // 144
     private const int ProofScalarSize = 32;
+    private const int ProofScalarSlack = 8;          // covers the 4 fixed scalars + margin
 
     private static readonly bool NativeAvailable;
     private static readonly Exception? NativeLoadError;
@@ -28,18 +32,24 @@ public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
         {
             // Probe for the native library by calling a trivial function.
             // bbs_sk_to_pk with empty input will return -1 (error) but that's fine —
-            // we only care that the DLL loaded.
+            // we only care that the DLL loaded and the entry point resolved.
             ZkryptiumNative.bbs_sk_to_pk(ReadOnlySpan<byte>.Empty, Span<byte>.Empty);
             NativeAvailable = true;
         }
-        catch (DllNotFoundException ex)
+        catch (Exception ex) when (
+            ex is DllNotFoundException          // library not present for this RID
+            or EntryPointNotFoundException      // wrong/older library: a symbol is missing
+            or BadImageFormatException)         // architecture/format mismatch
         {
+            // Treat a missing library OR an incompatible/partial one as unavailable so
+            // operations surface BbsUnavailableException rather than a raw native error.
             NativeAvailable = false;
             NativeLoadError = ex;
         }
         catch
         {
-            // Any other exception means the library loaded but the call failed, which is fine.
+            // Any other exception means the library loaded and the entry point resolved
+            // but the call itself returned an error code, which is fine for a probe.
             NativeAvailable = true;
         }
     }
@@ -80,6 +90,7 @@ public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
     /// <inheritdoc />
     public byte[] Sign(ReadOnlySpan<byte> privateKey, IReadOnlyList<byte[]> messages)
     {
+        ArgumentNullException.ThrowIfNull(messages);
         EnsureNativeAvailable();
 
         if (privateKey.Length != SecretKeySize)
@@ -111,6 +122,7 @@ public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
     /// <inheritdoc />
     public bool Verify(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> signature, IReadOnlyList<byte[]> messages)
     {
+        ArgumentNullException.ThrowIfNull(messages);
         EnsureNativeAvailable();
 
         if (publicKey.Length != PublicKeySize)
@@ -137,6 +149,9 @@ public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
         IReadOnlyList<int> revealedIndices,
         ReadOnlySpan<byte> nonce)
     {
+        ArgumentNullException.ThrowIfNull(signature);
+        ArgumentNullException.ThrowIfNull(messages);
+        ArgumentNullException.ThrowIfNull(revealedIndices);
         EnsureNativeAvailable();
 
         if (publicKey.Length != PublicKeySize)
@@ -149,10 +164,11 @@ public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
         var encodedMessages = ZkryptiumNative.EncodeMessages(messages);
         var encodedIndices = ZkryptiumNative.EncodeIndices(revealedIndices);
 
-        // Compute exact proof buffer size from the BLS12-381-SHA-256 formula
-        var undisclosed = messages.Count - revealedIndices.Count;
-        var proofBufSize = ProofPointOverhead + ProofScalarSize * (undisclosed + 1);
-        var proofBuf = new byte[Math.Max(proofBufSize, 512)];
+        // Allocate off the total message count with slack: an upper bound for the proof
+        // size under any reveal pattern (undisclosed <= messages.Count). The FFI writes
+        // the actual length into proofLen.
+        var proofBufSize = ProofPointOverhead + ProofScalarSize * (messages.Count + ProofScalarSlack);
+        var proofBuf = new byte[proofBufSize];
 
         var rc = ZkryptiumNative.bbs_proof_gen(
             publicKey,
@@ -178,6 +194,9 @@ public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
         IReadOnlyList<int> revealedIndices,
         ReadOnlySpan<byte> nonce)
     {
+        ArgumentNullException.ThrowIfNull(proof);
+        ArgumentNullException.ThrowIfNull(revealedMessages);
+        ArgumentNullException.ThrowIfNull(revealedIndices);
         EnsureNativeAvailable();
 
         if (publicKey.Length != PublicKeySize)
