@@ -64,3 +64,28 @@ types are not just `IOOR`/`NRE` — also `FormatException`, `OverflowException`,
 `KeyNotFoundException`, and any backend exception; all must become `ArgumentException`/
 `ArgumentNullException` (or a documented `false` for verify-style methods). Widen the shared fuzz
 test to feed non-zero random and "valid-encoding-of-invalid-value" buffers, not only zeros.
+
+## L4 — AGENTS.md mandates an adversarial agent on generated code; run it before saying "done"
+
+**Context:** For issue #2 (expose the BBS `header`) I implemented, ran the happy-path + a few
+negative tests, and reported the task complete — without launching the adversarial exploitation
+agent that AGENTS.md §2 ("Always use adversarial agents to attempt to exploit the code that is
+being generated") requires. The user had to ask "Did you run an adversarial exploitation per
+AGENTS.md?" The agent I then ran executed 24 exploit attempts (header-strip/mandatory-drop,
+header↔ph aliasing, empty-vs-1-byte boundary, FFI mid-buffer-slice marshalling, asymmetric
+argument-order to catch a header/ph slot swap, 1 MB and embedded-null headers) and found no
+exploit — but the point is the check is not optional and is most valuable on **security-relevant**
+changes, which is exactly when it's tempting to skip because the unit tests are green.
+
+**Rule:** A change is not "done" until an independent adversarial agent has tried to break it and
+reported. My own round-trip tests prove the feature *works*; they do not prove it *can't be
+abused*. Especially for crypto/auth/binding code, the adversarial pass is part of the definition
+of done, not a follow-up. Bonus: it caught that BBS `proof_gen` does not pre-validate the
+signature (success ≠ valid proof; the gate is `VerifyProof`) — a real semantic the happy-path
+tests obscured.
+
+**How to apply:** After implementing any security-relevant change and before declaring completion,
+launch an adversarial subagent that WRITES AND RUNS exploit code (not just reasons) against the
+built artifact, with an explicit "your job is to break this, report every weakness" framing and a
+concrete attack list. For binding/commitment properties, always include an *asymmetric* test
+(different-length inputs) so a silent argument-order swap can't pass via symmetry.
