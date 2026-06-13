@@ -17,7 +17,7 @@ dotnet add package NetCrypto
 > flag is required. The public API is frozen: `PublicAPI.Shipped.txt` is the authoritative
 > contract and `PublicAPI.Unshipped.txt` is empty. Semantic versioning applies — additive
 > changes bump the minor version, breaking changes the major; any pre-GA `1.0.0-preview.*`
-> packages are superseded by `1.0.0`.
+> packages are superseded by `1.0.0`. See [CHANGELOG.md](CHANGELOG.md) for the release history.
 
 Target framework: **net10.0**. Depends on [`NetCid`](https://www.nuget.org/packages/NetCid)
 for multibase/multicodec encoding.
