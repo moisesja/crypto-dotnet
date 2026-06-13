@@ -157,6 +157,46 @@ public class KeyInputValidationTests
         act.Should().Throw<ArgumentException>().WithParameterName("privateKey");
     }
 
+    // A correctly-sized but out-of-range NIST scalar (D = 0, or D >= the curve order n — here the
+    // all-0xFF maximum) is not a valid private key. It must surface as a parameter-named
+    // ArgumentException, not the opaque platform CryptographicException ImportParameters would
+    // otherwise raise — matching the BLS/secp256k1 invalid-scalar behaviour.
+    [Theory]
+    [InlineData(KeyType.P256, 32)]
+    [InlineData(KeyType.P384, 48)]
+    [InlineData(KeyType.P521, 66)]
+    public void Sign_Nist_OutOfRangeScalar_ThrowsArgumentExceptionWithParameterName(KeyType keyType, int len)
+    {
+        foreach (var d in CorrectLengthOutOfRangeScalars(len))
+        {
+            var act = () => Provider.Sign(keyType, d, [1, 2, 3]);
+            act.Should().Throw<ArgumentException>().WithParameterName("privateKey");
+        }
+    }
+
+    [Theory]
+    [InlineData(KeyType.P256, 32)]
+    [InlineData(KeyType.P384, 48)]
+    [InlineData(KeyType.P521, 66)]
+    public void FromPrivateKey_Nist_OutOfRangeScalar_ThrowsArgumentExceptionWithParameterName(KeyType keyType, int len)
+    {
+        foreach (var d in CorrectLengthOutOfRangeScalars(len))
+        {
+            var act = () => Generator.FromPrivateKey(keyType, d);
+            act.Should().Throw<ArgumentException>().WithParameterName("privateKey");
+        }
+    }
+
+    // D = 0 (all-zero) and D >= n (all-0xFF exceeds every supported curve order), both at the
+    // correct byte length so the length guard passes and the range check is what rejects them.
+    private static IEnumerable<byte[]> CorrectLengthOutOfRangeScalars(int len)
+    {
+        yield return new byte[len];
+        var max = new byte[len];
+        Array.Fill(max, (byte)0xFF);
+        yield return max;
+    }
+
     // ── Sanity: valid keys still round-trip after the new guards ──
 
     [Theory]

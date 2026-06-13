@@ -212,6 +212,15 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
         // parameter-named ArgumentException makes the caller bug unambiguous (NFR-3).
         RawKeyGuard.RequireLength(privateKey, EcScalarByteLength(curve), nameof(privateKey), "EC private key");
 
+        // Reject an out-of-range scalar up front. A correctly-sized D that is 0 or >= the curve
+        // order n is not a valid private key; without this it would fail at ImportParameters time
+        // with the same opaque platform CryptographicException. Normalizing it to a
+        // parameter-named ArgumentException matches the BLS/secp256k1 paths (NFR-3 consistency).
+        var d = new BigInteger(privateKey, isUnsigned: true, isBigEndian: true);
+        if (d <= BigInteger.Zero || d >= EcCurveOrder(curve))
+            throw new ArgumentException(
+                "EC private key scalar is out of range (must satisfy 0 < D < n).", nameof(privateKey));
+
         return new ECParameters
         {
             Curve = curve,
@@ -225,6 +234,26 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
         "1.2.840.10045.3.1.7" => 32, // P-256
         "1.3.132.0.34" => 48,        // P-384
         "1.3.132.0.35" => 66,        // P-521 (521 bits → 66 bytes)
+        _ => throw new ArgumentException("Unsupported curve for EC private key import.", nameof(curve))
+    };
+
+    // NIST curve group orders n (verified against the published FIPS 186-4 / SEC 2 values).
+    // Each is parsed with a leading "0" nibble so NumberStyles.HexNumber yields a positive value.
+    private static readonly BigInteger P256Order = BigInteger.Parse(
+        "0FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551", NumberStyles.HexNumber);
+    private static readonly BigInteger P384Order = BigInteger.Parse(
+        "0FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF581A0DB248B0A77AECEC196ACCC52973",
+        NumberStyles.HexNumber);
+    private static readonly BigInteger P521Order = BigInteger.Parse(
+        "01FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFA51868783BF2F966B7FCC0148F709A5D03BB5C9B8899C47AEBB6FB71E91386409",
+        NumberStyles.HexNumber);
+
+    // NIST EC private-key scalar upper bound (the curve order n) for the supported curves.
+    private static BigInteger EcCurveOrder(ECCurve curve) => curve.Oid?.Value switch
+    {
+        "1.2.840.10045.3.1.7" => P256Order,
+        "1.3.132.0.34" => P384Order,
+        "1.3.132.0.35" => P521Order,
         _ => throw new ArgumentException("Unsupported curve for EC private key import.", nameof(curve))
     };
 
