@@ -66,6 +66,11 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
     /// <inheritdoc />
     public byte[] KeyAgreement(ReadOnlySpan<byte> privateKey, ReadOnlySpan<byte> publicKey)
     {
+        // Validate both raw blobs before NSec (which throws FormatException on a wrong-length
+        // import) so a malformed input surfaces as a parameter-named ArgumentException (NFR-3).
+        RawKeyGuard.RequireLength(privateKey, 32, nameof(privateKey), "X25519 private key");
+        RawKeyGuard.RequireLength(publicKey, 32, nameof(publicKey), "X25519 public key");
+
         var algorithm = NSec.Cryptography.KeyAgreementAlgorithm.X25519;
 
         using var key = Key.Import(algorithm, privateKey, KeyBlobFormat.RawPrivateKey);
@@ -97,6 +102,9 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
 
     private static byte[] DeriveX25519SharedSecret(ReadOnlySpan<byte> privateKey, ReadOnlySpan<byte> publicKey)
     {
+        RawKeyGuard.RequireLength(privateKey, 32, nameof(privateKey), "X25519 private key");
+        RawKeyGuard.RequireLength(publicKey, 32, nameof(publicKey), "X25519 public key");
+
         var algorithm = NSec.Cryptography.KeyAgreementAlgorithm.X25519;
 
         using var key = Key.Import(algorithm, privateKey, KeyBlobFormat.RawPrivateKey);
@@ -124,6 +132,10 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
 
     private static byte[] SignEd25519(ReadOnlySpan<byte> privateKey, ReadOnlySpan<byte> data)
     {
+        // Validate before NSec, whose Key.Import throws a raw FormatException on a wrong-length
+        // raw blob; surface a parameter-named ArgumentException instead (NFR-3).
+        RawKeyGuard.RequireLength(privateKey, 32, nameof(privateKey), "Ed25519 private key");
+
         var algorithm = SignatureAlgorithm.Ed25519;
 
         // Our private key is 32-byte seed. NSec's RawPrivateKey expects the seed.
@@ -135,6 +147,12 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
 
     private static bool VerifyEd25519(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> data, ReadOnlySpan<byte> signature)
     {
+        // A wrong-length public key is a malformed caller input, not a verification outcome —
+        // throw ArgumentException rather than leaking NSec's FormatException (matches the EC
+        // verify path, which rejects wrong-length/malformed-format keys the same way). An
+        // attacker-controlled wrong-length *signature* is handled by NSec.Verify returning false.
+        RawKeyGuard.RequireLength(publicKey, 32, nameof(publicKey), "Ed25519 public key");
+
         var algorithm = SignatureAlgorithm.Ed25519;
         var pubKey = NSec.Cryptography.PublicKey.Import(algorithm, publicKey, KeyBlobFormat.RawPublicKey);
         return algorithm.Verify(pubKey, data, signature);
@@ -188,12 +206,27 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
 
     internal static ECParameters ImportEcPrivateKey(ReadOnlySpan<byte> privateKey, ECCurve curve)
     {
+        // Validate the scalar length up front: a wrong-length D otherwise fails inside
+        // ECDsa/ECDiffieHellman.ImportParameters with an opaque, platform-specific
+        // CryptographicException (e.g. macOS AppleCommonCryptoCryptographicException). A
+        // parameter-named ArgumentException makes the caller bug unambiguous (NFR-3).
+        RawKeyGuard.RequireLength(privateKey, EcScalarByteLength(curve), nameof(privateKey), "EC private key");
+
         return new ECParameters
         {
             Curve = curve,
             D = privateKey.ToArray()
         };
     }
+
+    // NIST EC private-key scalar length (field byte length) for the supported curves.
+    private static int EcScalarByteLength(ECCurve curve) => curve.Oid?.Value switch
+    {
+        "1.2.840.10045.3.1.7" => 32, // P-256
+        "1.3.132.0.34" => 48,        // P-384
+        "1.3.132.0.35" => 66,        // P-521 (521 bits → 66 bytes)
+        _ => throw new ArgumentException("Unsupported curve for EC private key import.", nameof(curve))
+    };
 
     internal static ECParameters ImportEcPublicKey(ReadOnlySpan<byte> publicKey, ECCurve curve)
     {
@@ -353,8 +386,20 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
 
     private static byte[] SignBls(KeyType keyType, ReadOnlySpan<byte> privateKey, ReadOnlySpan<byte> data)
     {
+        // Nethermind's SecretKey.FromBendian throws BlsException on a wrong-length or otherwise
+        // invalid (zero / out-of-range) scalar; convert both to a parameter-named
+        // ArgumentException so bad input never leaks a backend exception type (NFR-3).
+        RawKeyGuard.RequireLength(privateKey, 32, nameof(privateKey), "BLS12-381 private key");
+
         var sk = new Bls.SecretKey();
-        sk.FromBendian(privateKey);
+        try
+        {
+            sk.FromBendian(privateKey);
+        }
+        catch (Bls.BlsException ex)
+        {
+            throw new ArgumentException("Invalid BLS12-381 private key.", nameof(privateKey), ex);
+        }
 
         if (keyType == KeyType.Bls12381G1)
         {

@@ -119,7 +119,14 @@ advisory is:
 
 CI ignores this advisory via `cargo audit --ignore RUSTSEC-2026-0097`.
 Any other warning fails the job — keeping the dependency tree clean is
-intentional. Re-evaluate on every `zkryptium` upgrade.
+intentional.
+
+**Remediation is gated on upstream:** the advisory is fixed in `rand 0.9`, which
+`rand 0.8.5` (pulled transitively by `zkryptium 0.6.1`) cannot reach without a
+breaking change. There is no in-tree pin that resolves it. Drop the `--ignore`
+the moment a `zkryptium` release bumps its `rand` dependency past 0.8.x; re-run
+the BBS draft-10 fixture tests when taking that upgrade (the wrapped BBS build
+must still match the spec).
 
 ## Troubleshooting
 
