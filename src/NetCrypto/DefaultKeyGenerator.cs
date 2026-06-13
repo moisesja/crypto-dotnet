@@ -141,6 +141,16 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
         var u = numerator * ModInverse(denominator, p) % p;
         if (u < 0) u += p;
 
+        // Reject low-order results. An Ed25519 public key that is itself a small-order point
+        // (e.g. the all-zero key, y = 0) maps to a low-order Montgomery u-coordinate; minting a
+        // PublicKeyReference for it would hand a degenerate, small-subgroup X25519 key to callers
+        // that key-agree with it. The five canonical Curve25519 low-order u-coordinates (orders
+        // 1/2/4/8, reduced mod p) are the complete set to exclude (RFC 7748 §6.1 small-subgroup
+        // guidance). Legitimate prime-order Ed25519 keys never land here.
+        if (LowOrderX25519U.Contains(u))
+            throw new ArgumentException(
+                "Ed25519 public key maps to a low-order X25519 point.", nameof(ed25519PublicKey));
+
         // Encode u as 32 bytes little-endian
         var uBytes = u.ToByteArray(isUnsigned: true, isBigEndian: false);
         var result = new byte[32];
@@ -156,6 +166,20 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
     /// <summary>Modular inverse via Fermat's little theorem: a^(p-2) mod p.</summary>
     private static System.Numerics.BigInteger ModInverse(System.Numerics.BigInteger a, System.Numerics.BigInteger m)
         => System.Numerics.BigInteger.ModPow(a, m - 2, m);
+
+    // The canonical Curve25519 low-order point u-coordinates (points of order 1, 2, 4, and 8),
+    // reduced mod p = 2^255 − 19. Any derived u in this set is a small-subgroup point and must be
+    // rejected. (p and p+1 reduce to 0 and 1, already listed.)
+    private static readonly System.Numerics.BigInteger X25519Prime =
+        System.Numerics.BigInteger.Pow(2, 255) - 19;
+    private static readonly HashSet<System.Numerics.BigInteger> LowOrderX25519U =
+    [
+        System.Numerics.BigInteger.Zero,
+        System.Numerics.BigInteger.One,
+        System.Numerics.BigInteger.Parse("325606250916557431795983626356110631294008115727848805560023387167927233504"),
+        System.Numerics.BigInteger.Parse("39382357235489614581723060781553021112529911719440698176882885853963445705823"),
+        X25519Prime - 1,
+    ];
 
     // --- Ed25519 ---
 
@@ -175,6 +199,9 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
 
     private static KeyPair RestoreEd25519(ReadOnlySpan<byte> privateKey)
     {
+        // Guard before NSec (raw FormatException on a wrong-length blob) → ArgumentException (NFR-3).
+        RawKeyGuard.RequireLength(privateKey, 32, nameof(privateKey), "Ed25519 private key");
+
         var algorithm = SignatureAlgorithm.Ed25519;
         using var key = Key.Import(algorithm, privateKey, KeyBlobFormat.RawPrivateKey,
             new KeyCreationParameters { ExportPolicy = KeyExportPolicies.AllowPlaintextExport });
@@ -205,6 +232,8 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
 
     private static KeyPair RestoreX25519(ReadOnlySpan<byte> privateKey)
     {
+        RawKeyGuard.RequireLength(privateKey, 32, nameof(privateKey), "X25519 private key");
+
         var algorithm = NSec.Cryptography.KeyAgreementAlgorithm.X25519;
         using var key = Key.Import(algorithm, privateKey, KeyBlobFormat.RawPrivateKey,
             new KeyCreationParameters { ExportPolicy = KeyExportPolicies.AllowPlaintextExport });
@@ -326,8 +355,19 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
 
     private static KeyPair RestoreBls(KeyType keyType, ReadOnlySpan<byte> privateKey)
     {
+        // FromBendian throws BlsException on a wrong-length/invalid scalar; normalize to a
+        // parameter-named ArgumentException (NFR-3), matching SignBls.
+        RawKeyGuard.RequireLength(privateKey, 32, nameof(privateKey), "BLS12-381 private key");
+
         var sk = new Bls.SecretKey();
-        sk.FromBendian(privateKey);
+        try
+        {
+            sk.FromBendian(privateKey);
+        }
+        catch (Bls.BlsException ex)
+        {
+            throw new ArgumentException("Invalid BLS12-381 private key.", nameof(privateKey), ex);
+        }
 
         return BuildBlsKeyPair(keyType, sk);
     }

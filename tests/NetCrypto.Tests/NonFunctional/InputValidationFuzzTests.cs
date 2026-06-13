@@ -15,11 +15,11 @@ namespace NetCrypto.Tests.NonFunctional;
 /// OverflowException (PRD §4 NFR-3 acceptance criterion).
 /// </summary>
 /// <remarks>
-/// Deviations observed in the code migrated from net-did are pinned, member by member, in
-/// <see cref="KnownBackendDeviations"/> so this suite stays green while the gaps remain
-/// faithfully on record. Do NOT widen that table to make a new failure pass — either the
-/// new exception is within contract or src needs up-front validation (orchestrator
-/// decision; parity with net-did matters).
+/// Every byte-oriented entry point now validates its raw key/scalar inputs up front (see
+/// <see cref="RawKeyGuard"/>), so malformed input always surfaces as a contract exception. There
+/// is intentionally NO "known deviations" allow-list: any non-contract exception (a leaked NSec
+/// <c>FormatException</c>, Nethermind <c>BlsException</c>, platform crypto exception, etc.) is a
+/// real NFR-3 defect that must be fixed in src — never pinned to keep this suite green.
 /// </remarks>
 public class InputValidationFuzzTests
 {
@@ -32,44 +32,6 @@ public class InputValidationFuzzTests
     /// <summary>One valid key pair per key type, generated once and shared read-only.</summary>
     private static readonly IReadOnlyDictionary<KeyType, KeyPair> ValidKeyPairs =
         Enum.GetValues<KeyType>().ToDictionary(keyType => keyType, keyType => Generator.Generate(keyType));
-
-    /// <summary>
-    /// Exception types outside the NFR-3 contract that the migrated Phase-A code currently
-    /// throws, keyed by (member, key type). Each entry is an NFR-3 gap inherited from net-did:
-    /// <list type="bullet">
-    /// <item><description><c>System.FormatException</c>: NSec.Cryptography's
-    /// Key.Import/PublicKey.Import throw it for wrong-length raw key blobs; the provider and
-    /// generator do no up-front length validation on NSec-backed paths.</description></item>
-    /// <item><description><c>Nethermind.Crypto.Bls+BlsException</c> (base
-    /// <see cref="ApplicationException"/>): thrown for wrong-length BLS12-381 scalar
-    /// encodings.</description></item>
-    /// </list>
-    /// The secp256k1 paths formerly crashed with <c>IndexOutOfRangeException</c> on sub-32-byte
-    /// keys (NBitcoin's <c>ECPrivKey.Create</c> indexes a 32-byte span). That was a genuine NFR-3
-    /// violation and is now fixed with an up-front length guard in
-    /// <c>DefaultCryptoProvider.SignSecp256k1</c> and <c>DefaultKeyGenerator.RestoreSecp256k1</c>,
-    /// so secp256k1 carries no pinned deviation.
-    /// </summary>
-    private static readonly IReadOnlyDictionary<(string Member, KeyType KeyType), string[]> KnownBackendDeviations =
-        new Dictionary<(string, KeyType), string[]>
-        {
-            // NSec raw-blob imports: FormatException instead of ArgumentException.
-            [("Sign", KeyType.Ed25519)] = ["System.FormatException"],
-            [("Verify", KeyType.Ed25519)] = ["System.FormatException"],
-            [("KeyAgreement", KeyType.X25519)] = ["System.FormatException"],
-            [("DeriveSharedSecret", KeyType.X25519)] = ["System.FormatException"],
-            [("FromPrivateKey", KeyType.Ed25519)] = ["System.FormatException"],
-            [("FromPrivateKey", KeyType.X25519)] = ["System.FormatException"],
-
-            // Nethermind BLS scalar decode: BlsException ("bad encoding") instead of ArgumentException.
-            [("Sign", KeyType.Bls12381G1)] = ["Nethermind.Crypto.Bls+BlsException"],
-            [("Sign", KeyType.Bls12381G2)] = ["Nethermind.Crypto.Bls+BlsException"],
-            [("FromPrivateKey", KeyType.Bls12381G1)] = ["Nethermind.Crypto.Bls+BlsException"],
-            [("FromPrivateKey", KeyType.Bls12381G2)] = ["Nethermind.Crypto.Bls+BlsException"],
-
-            // secp256k1: now guarded — Sign/FromPrivateKey throw ArgumentException for any
-            // non-32-byte key (no pinned deviation; enforced by the contract assertion below).
-        };
 
     /// <summary>All key types crossed with all fuzz input sizes.</summary>
     public static TheoryData<KeyType, int> KeyTypeAndSizeMatrix()
@@ -261,8 +223,8 @@ public class InputValidationFuzzTests
     /// Invokes the entry point and asserts the NFR-3 exception contract: not throwing is fine
     /// (e.g. Verify returning false); throwing is fine only for
     /// ArgumentException (covers ArgumentNullException/ArgumentOutOfRangeException),
-    /// CryptographicException (covers platform-specific subclasses), or NotSupportedException —
-    /// plus the exact exception types pinned in <see cref="KnownBackendDeviations"/>.
+    /// CryptographicException (covers platform-specific subclasses), or NotSupportedException.
+    /// Any other exception type is an NFR-3 defect and fails the test — there is no allow-list.
     /// </summary>
     private static void AssertValidationContract(string member, KeyType keyType, string inputShape, Action act)
     {
@@ -276,12 +238,6 @@ public class InputValidationFuzzTests
         }
         catch (Exception ex)
         {
-            if (KnownBackendDeviations.TryGetValue((member, keyType), out var tolerated)
-                && tolerated.Contains(ex.GetType().FullName))
-            {
-                return; // Pinned deviation — see KnownBackendDeviations docs.
-            }
-
             Assert.Fail(
                 $"{member} ({keyType}) with {inputShape} input threw {ex.GetType().FullName}: '{ex.Message}'. " +
                 "Expected ArgumentException/ArgumentNullException/CryptographicException/NotSupportedException, " +

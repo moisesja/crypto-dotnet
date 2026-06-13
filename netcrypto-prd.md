@@ -310,7 +310,7 @@ No type from `NSec.*`, `NBitcoin.*`, `Nethermind.*`, or `NetCrypto.Native` in an
 Any JSON handling uses `System.Text.Json` (or `Microsoft.IdentityModel.Tokens` 8.x). **AC:** dependency-graph check from AC-1.
 
 ### NFR-3 — Input validation
-Every public method validates lengths/nulls and throws `ArgumentException`/`ArgumentNullException` with the parameter name before any crypto operation. **AC:** per-primitive negative tests exist (each FR above includes them); no public method can be made to throw `IndexOutOfRangeException`/`NullReferenceException` from bad input (fuzz-lite test: null/empty/oversized inputs across the surface).
+Every public method validates lengths/nulls and throws `ArgumentException`/`ArgumentNullException` with the parameter name before any crypto operation. **AC:** per-primitive negative tests exist (each FR above includes them); no public method can be made to throw `IndexOutOfRangeException`/`NullReferenceException` from bad input (fuzz-lite test: null/empty/oversized inputs across the surface). A wrong-length raw key/scalar handed to a backend (NSec, Nethermind BLS, platform EC import) must surface as a **parameter-named `ArgumentException`**, never a leaked backend type (`System.FormatException`, `Nethermind.Crypto.Bls+BlsException`, or a platform `CryptographicException`); the fuzz-lite suite carries **no** "known deviation" allow-list, and any non-contract exception fails it rather than being pinned.
 
 ### NFR-4 — Determinism and thread safety
 All `Default*` providers and static classes are stateless/thread-safe. **AC:** a parallel test (≥ 8 threads × 100 ops on one shared provider instance, mixed key types) completes without error and with valid outputs.

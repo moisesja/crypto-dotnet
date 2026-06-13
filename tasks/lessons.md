@@ -89,3 +89,32 @@ launch an adversarial subagent that WRITES AND RUNS exploit code (not just reaso
 built artifact, with an explicit "your job is to break this, report every weakness" framing and a
 concrete attack list. For binding/commitment properties, always include an *asymmetric* test
 (different-length inputs) so a silent argument-order swap can't pass via symmetry.
+
+## L5 — A permissive test contract hides real gaps; "passes the fuzz suite" ≠ "clean errors"
+
+**Context:** A security review (preview.3) flagged that wrong-length raw keys leaked
+`System.FormatException` (NSec), `Nethermind.Crypto.Bls+BlsException`, and macOS
+`AppleCommonCryptoCryptographicException` from `DefaultCryptoProvider`/`DefaultKeyGenerator` instead
+of a parameter-named `ArgumentException`. Two reasons it survived: (a) the fuzz-lite assertion
+tolerated `CryptographicException` as "in contract," so the EC private-key path leaking a *platform
+crypto exception* on a wrong-length key passed the suite even though NFR-3's normative text demands
+a parameter-named `ArgumentException` "before any crypto operation"; (b) the NSec/BLS
+`FormatException`/`BlsException` leaks were *pinned* in a `KnownBackendDeviations` allow-list (the
+exact red flag L1 named) so the suite stayed green while the gap stayed open. The fix was an
+up-front length guard (`RawKeyGuard.RequireLength`) at every backend hand-off, plus a try/catch that
+converts BLS's value-validity `BlsException` to `ArgumentException`, plus deleting the allow-list
+entirely so any non-contract exception now fails.
+
+**Rule:** When a test's pass condition is broad ("throws any of A/B/C, or is pinned"), it certifies
+far less than it appears. A wrong-length input is a *caller bug* and must produce a clear,
+parameter-named `ArgumentException` — `CryptographicException` (even a platform subclass) is
+reserved for genuine crypto failures and must NOT double as the catch-all for malformed input.
+Reflect the strict bar in BOTH the assertion (no allow-list; non-contract exception ⇒ fail) and the
+PRD AC, so the contract can't quietly relax again.
+
+**How to apply:** For every public method that forwards caller bytes to a third-party/native/platform
+backend, validate length (and other cheap invariants) *before* the hand-off and map any residual
+backend exception to `ArgumentException(paramName)`. Never pin a backend-exception deviation to go
+green — fix src. Write the assertion as `WithParameterName(...)`, not merely "threw something in a
+set." Probe each backend's actual failure type on bad input on every supported OS (the macOS EC
+exception differs from Windows/Linux), since "in contract on my machine" can hide a leak elsewhere.
