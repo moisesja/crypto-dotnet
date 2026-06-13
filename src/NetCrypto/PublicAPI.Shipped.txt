@@ -11,11 +11,11 @@ NetCrypto.ConcatKdf
 NetCrypto.DefaultBbsCryptoProvider
 NetCrypto.DefaultBbsCryptoProvider.Ciphersuite.get -> NetCrypto.BbsCiphersuite
 NetCrypto.DefaultBbsCryptoProvider.DefaultBbsCryptoProvider(NetCrypto.BbsCiphersuite ciphersuite = NetCrypto.BbsCiphersuite.Bls12381Sha256) -> void
-NetCrypto.DefaultBbsCryptoProvider.DeriveProof(System.ReadOnlySpan<byte> publicKey, byte[]! signature, System.Collections.Generic.IReadOnlyList<byte[]!>! messages, System.Collections.Generic.IReadOnlyList<int>! revealedIndices, System.ReadOnlySpan<byte> nonce) -> byte[]!
+NetCrypto.DefaultBbsCryptoProvider.DeriveProof(System.ReadOnlySpan<byte> publicKey, byte[]! signature, System.Collections.Generic.IReadOnlyList<byte[]!>! messages, System.Collections.Generic.IReadOnlyList<int>! revealedIndices, System.ReadOnlySpan<byte> presentationHeader, System.ReadOnlySpan<byte> header = default(System.ReadOnlySpan<byte>)) -> byte[]!
 NetCrypto.DefaultBbsCryptoProvider.IsAvailable.get -> bool
-NetCrypto.DefaultBbsCryptoProvider.Sign(System.ReadOnlySpan<byte> privateKey, System.Collections.Generic.IReadOnlyList<byte[]!>! messages) -> byte[]!
-NetCrypto.DefaultBbsCryptoProvider.Verify(System.ReadOnlySpan<byte> publicKey, System.ReadOnlySpan<byte> signature, System.Collections.Generic.IReadOnlyList<byte[]!>! messages) -> bool
-NetCrypto.DefaultBbsCryptoProvider.VerifyProof(System.ReadOnlySpan<byte> publicKey, byte[]! proof, System.Collections.Generic.IReadOnlyList<byte[]!>! revealedMessages, System.Collections.Generic.IReadOnlyList<int>! revealedIndices, System.ReadOnlySpan<byte> nonce) -> bool
+NetCrypto.DefaultBbsCryptoProvider.Sign(System.ReadOnlySpan<byte> privateKey, System.Collections.Generic.IReadOnlyList<byte[]!>! messages, System.ReadOnlySpan<byte> header = default(System.ReadOnlySpan<byte>)) -> byte[]!
+NetCrypto.DefaultBbsCryptoProvider.Verify(System.ReadOnlySpan<byte> publicKey, System.ReadOnlySpan<byte> signature, System.Collections.Generic.IReadOnlyList<byte[]!>! messages, System.ReadOnlySpan<byte> header = default(System.ReadOnlySpan<byte>)) -> bool
+NetCrypto.DefaultBbsCryptoProvider.VerifyProof(System.ReadOnlySpan<byte> publicKey, byte[]! proof, System.Collections.Generic.IReadOnlyList<byte[]!>! revealedMessages, System.Collections.Generic.IReadOnlyList<int>! revealedIndices, System.ReadOnlySpan<byte> presentationHeader, System.ReadOnlySpan<byte> header = default(System.ReadOnlySpan<byte>)) -> bool
 NetCrypto.DefaultCryptoProvider
 NetCrypto.DefaultCryptoProvider.DefaultCryptoProvider() -> void
 NetCrypto.DefaultCryptoProvider.DeriveSharedSecret(NetCrypto.KeyType keyType, System.ReadOnlySpan<byte> privateKey, System.ReadOnlySpan<byte> publicKey) -> byte[]!
@@ -39,11 +39,11 @@ NetCrypto.Hash
 NetCrypto.Hkdf
 NetCrypto.IBbsCryptoProvider
 NetCrypto.IBbsCryptoProvider.Ciphersuite.get -> NetCrypto.BbsCiphersuite
-NetCrypto.IBbsCryptoProvider.DeriveProof(System.ReadOnlySpan<byte> publicKey, byte[]! signature, System.Collections.Generic.IReadOnlyList<byte[]!>! messages, System.Collections.Generic.IReadOnlyList<int>! revealedIndices, System.ReadOnlySpan<byte> nonce) -> byte[]!
+NetCrypto.IBbsCryptoProvider.DeriveProof(System.ReadOnlySpan<byte> publicKey, byte[]! signature, System.Collections.Generic.IReadOnlyList<byte[]!>! messages, System.Collections.Generic.IReadOnlyList<int>! revealedIndices, System.ReadOnlySpan<byte> presentationHeader, System.ReadOnlySpan<byte> header = default(System.ReadOnlySpan<byte>)) -> byte[]!
 NetCrypto.IBbsCryptoProvider.IsAvailable.get -> bool
-NetCrypto.IBbsCryptoProvider.Sign(System.ReadOnlySpan<byte> privateKey, System.Collections.Generic.IReadOnlyList<byte[]!>! messages) -> byte[]!
-NetCrypto.IBbsCryptoProvider.Verify(System.ReadOnlySpan<byte> publicKey, System.ReadOnlySpan<byte> signature, System.Collections.Generic.IReadOnlyList<byte[]!>! messages) -> bool
-NetCrypto.IBbsCryptoProvider.VerifyProof(System.ReadOnlySpan<byte> publicKey, byte[]! proof, System.Collections.Generic.IReadOnlyList<byte[]!>! revealedMessages, System.Collections.Generic.IReadOnlyList<int>! revealedIndices, System.ReadOnlySpan<byte> nonce) -> bool
+NetCrypto.IBbsCryptoProvider.Sign(System.ReadOnlySpan<byte> privateKey, System.Collections.Generic.IReadOnlyList<byte[]!>! messages, System.ReadOnlySpan<byte> header = default(System.ReadOnlySpan<byte>)) -> byte[]!
+NetCrypto.IBbsCryptoProvider.Verify(System.ReadOnlySpan<byte> publicKey, System.ReadOnlySpan<byte> signature, System.Collections.Generic.IReadOnlyList<byte[]!>! messages, System.ReadOnlySpan<byte> header = default(System.ReadOnlySpan<byte>)) -> bool
+NetCrypto.IBbsCryptoProvider.VerifyProof(System.ReadOnlySpan<byte> publicKey, byte[]! proof, System.Collections.Generic.IReadOnlyList<byte[]!>! revealedMessages, System.Collections.Generic.IReadOnlyList<int>! revealedIndices, System.ReadOnlySpan<byte> presentationHeader, System.ReadOnlySpan<byte> header = default(System.ReadOnlySpan<byte>)) -> bool
 NetCrypto.ICryptoProvider
 NetCrypto.ICryptoProvider.DeriveSharedSecret(NetCrypto.KeyType keyType, System.ReadOnlySpan<byte> privateKey, System.ReadOnlySpan<byte> publicKey) -> byte[]!
 NetCrypto.ICryptoProvider.KeyAgreement(System.ReadOnlySpan<byte> privateKey, System.ReadOnlySpan<byte> publicKey) -> byte[]!

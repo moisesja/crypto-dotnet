@@ -7,6 +7,12 @@ namespace NetCrypto;
 /// BBS signature operations using BLS12-381-SHA-256 (IETF draft-irtf-cfrg-bbs-signatures-10).
 /// Delegates to the zkryptium-ffi native library via P/Invoke.
 /// </summary>
+/// <remarks>
+/// To mint a BBS keypair, use <see cref="DefaultKeyGenerator.Generate"/> with
+/// <see cref="KeyType.Bls12381G2"/> (96-byte public key — the variant signed/verified here) or
+/// <see cref="KeyType.Bls12381G1"/>. Raw FFI keygen is intentionally internal: there is no public
+/// raw secret/public-key minting helper, keeping the surface minimal and backend-agnostic.
+/// </remarks>
 public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
 {
     private const int SecretKeySize = 32;

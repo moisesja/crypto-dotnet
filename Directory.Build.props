@@ -3,9 +3,10 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <!-- Preview line: hyphenated SemVer suffix marks every build as a NuGet prerelease.
-         Release CI overrides this from the git tag (e.g. v1.0.0-preview.1 -> 1.0.0-preview.1). -->
-    <NetCryptoVersion Condition="'$(NetCryptoVersion)' == ''">1.0.0-preview.3</NetCryptoVersion>
+    <!-- GA: a plain SemVer (no hyphenated suffix) is a stable, non-prerelease NuGet package.
+         Release CI overrides this from the git tag (e.g. v1.0.0 -> 1.0.0; a v1.0.1-rc.1 tag would
+         still produce a prerelease). -->
+    <NetCryptoVersion Condition="'$(NetCryptoVersion)' == ''">1.0.0</NetCryptoVersion>
     <Deterministic>true</Deterministic>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>

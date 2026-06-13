@@ -10,11 +10,14 @@ stable interfaces, so that no domain library (`net-did`, `dataproofs-dotnet`,
 `credentials-dotnet`, `didcomm-dotnet`) binds directly to a specific crypto backend.
 
 ```
-dotnet add package NetCrypto --prerelease
+dotnet add package NetCrypto
 ```
 
-> NetCrypto is currently published as a **preview** (`1.0.0-preview.*`); the `--prerelease`
-> flag (or an explicit prerelease version) is required until a stable `1.0.0` is cut.
+> **Stable release.** NetCrypto is published as a stable **`1.0.0`** (GA) — no `--prerelease`
+> flag is required. The public API is frozen: `PublicAPI.Shipped.txt` is the authoritative
+> contract and `PublicAPI.Unshipped.txt` is empty. Semantic versioning applies — additive
+> changes bump the minor version, breaking changes the major; any pre-GA `1.0.0-preview.*`
+> packages are superseded by `1.0.0`.
 
 Target framework: **net10.0**. Depends on [`NetCid`](https://www.nuget.org/packages/NetCid)
 for multibase/multicodec encoding.
@@ -88,8 +91,25 @@ Every primitive is tested against the test vectors of its governing specificatio
 
 BBS is the only non-managed primitive: the `zkryptium-ffi` Rust crate
 ([`native/zkryptium-ffi/`](native/zkryptium-ffi/)) is compiled per platform and shipped
-inside this single NuGet package under `runtimes/{rid}/native/` for:
-`linux-x64`, `linux-arm64`, `osx-arm64`, `osx-x64`, `win-x64`.
+**inside this single NuGet package** under `runtimes/{rid}/native/`. A consumer that restores
+NetCrypto gets the BBS native payload transitively — no per-consumer native assets are needed.
+
+### Supported native platform matrix
+
+| RID | Library file | BBS at runtime |
+|---|---|---|
+| `osx-arm64`  | `libzkryptium_ffi.dylib` | ✅ built + smoke-executed in CI |
+| `osx-x64`    | `libzkryptium_ffi.dylib` | ✅ shipped (cross-compiled; Rosetta-capable hosts load it) |
+| `linux-x64`  | `libzkryptium_ffi.so`    | ✅ built + smoke-executed in CI |
+| `linux-arm64`| `libzkryptium_ffi.so`    | ✅ shipped (cross-compiled) |
+| `win-x64`    | `zkryptium_ffi.dll`      | ✅ built + smoke-executed in CI |
+
+On any of these RIDs `IBbsCryptoProvider.IsAvailable` returns `true` after a plain
+`dotnet restore`. The tag-triggered release workflow **fails the build** if any RID's native
+payload is missing from the produced `.nupkg` (the "Verify nupkg contains all five RIDs" step),
+publishes a SHA-256 checksum per binary, and then **smoke-tests** the packed package — installing
+it into a clean console app and running a BBS sign/verify round-trip — so the guarantee is
+verified against the actual published artifact, not the source tree.
 
 **All managed primitives work with no native library present** (unlisted platforms,
 or environments that prohibit native code). This is a supported, CI-tested mode:
@@ -102,6 +122,22 @@ if (!bbs.IsAvailable)
     // (InnerException carries the original native load error).
 }
 ```
+
+### BBS key generation
+
+The supported way to mint a BBS keypair is the **standard key generator** — the same one used
+for every other key type:
+
+```csharp
+var keyPair = new DefaultKeyGenerator().Generate(KeyType.Bls12381G2); // or Bls12381G1
+// keyPair.PrivateKey (32-byte BLS12-381 scalar), keyPair.PublicKey (96-byte G2 / 48-byte G1)
+byte[] sig = new DefaultBbsCryptoProvider().Sign(keyPair.PrivateKey, messages);
+```
+
+`Bls12381G2` (96-byte public key) is the variant the BBS provider signs/verifies with. Raw FFI
+keygen (`bbs_keygen`) is **intentionally internal** — there is no public raw-keygen helper, by
+design, to keep the public surface minimal and backend-agnostic. See
+[`samples/NetCrypto.Samples.Bbs`](samples/NetCrypto.Samples.Bbs) for an end-to-end example.
 
 The repository itself is source-only — every shipped binary is cross-compiled by the
 tag-triggered release workflow from pinned sources, with SHA-256 checksums published
@@ -118,6 +154,10 @@ as release assets.
   any public signature (enforced by `Microsoft.CodeAnalysis.PublicApiAnalyzers` with a
   committed `PublicAPI.Shipped.txt`, plus a reflection test). Sanctioned exceptions:
   `NetCid` types and `Microsoft.IdentityModel.Tokens.JsonWebKey`.
+- **EC point validation.** `EcPointValidator.EnsureOnCurve(KeyType, x, y)` is the public
+  on-curve validation entry point — the invalid-curve-attack defense (RFC 7518 §6.2.2). Point
+  *decompression* (`DecompressEcPoint` / `DecompressSecp256k1Point`) is an internal implementation
+  detail and is **not** part of the public surface; validating a key never requires it.
 - **Boundaries.** EVM `v`-encoding/RLP/transactions, JOSE/JWE/SD-JWT envelopes,
   Data Integrity proofs, ECDH-ES/1PU assembly, and concrete HSM/KMS stores are
   deliberately out of scope — they belong to the consumer layers.
