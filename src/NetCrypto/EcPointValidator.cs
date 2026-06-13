@@ -15,6 +15,12 @@ namespace NetCrypto;
 /// key agreement. Curve25519/Ed25519 do not need this — all encoded points are on-curve — so
 /// this validator only applies to NIST curves (P-256, P-384, P-521) and secp256k1. All four have
 /// cofactor 1, so a point on the curve is automatically in the prime-order subgroup.
+/// <para>
+/// <see cref="EnsureOnCurve"/> is the public EC point-validation entry point. Point
+/// <em>decompression</em> (recovering Y from a compressed SEC1 point) is an internal
+/// implementation detail of the provider, not part of the public surface — on-curve validation
+/// does not require it.
+/// </para>
 /// </remarks>
 public static class EcPointValidator
 {
