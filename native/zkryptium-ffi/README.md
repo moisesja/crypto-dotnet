@@ -72,10 +72,15 @@ All functions return `0` on success, `-1` on error.
 |----------|-------------|
 | `bbs_keygen` | Generate BBS keypair from IKM plus optional `key_info` (SK: 32 bytes, PK: 96 bytes). Pass null/0 for `key_info` to use the spec default (empty string); the key-generation DST is always the spec default. |
 | `bbs_sk_to_pk` | Derive public key from secret key |
-| `bbs_sign` | Sign an ordered set of messages |
-| `bbs_verify` | Verify a BBS signature against the full message set |
-| `bbs_proof_gen` | Derive a selective-disclosure zero-knowledge proof |
-| `bbs_proof_verify` | Verify a selective-disclosure proof |
+| `bbs_sign` | Sign an ordered set of messages, with an optional signer-bound `header` |
+| `bbs_verify` | Verify a BBS signature against the full message set and the same `header` |
+| `bbs_proof_gen` | Derive a selective-disclosure zero-knowledge proof (binds both `header` and presentation header `ph`) |
+| `bbs_proof_verify` | Verify a selective-disclosure proof against the committed `header` and `ph` |
+
+The signature `header` (passed as `header_ptr`/`header_len`) is fixed by the signer and committed
+by both verification and any derived proof; the presentation header `ph` (`ph_ptr`/`ph_len`) is
+chosen by the holder at proof-derivation time. Both are optional — pass null/0 for the spec default
+of an empty octet string.
 
 ## Message encoding
 

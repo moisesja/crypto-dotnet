@@ -76,6 +76,13 @@ Every primitive is tested against the test vectors of its governing specificatio
 > **BBS terminology.** "BBS" is the CFRG name for the scheme historically called BBS+.
 > Conformance is pinned to draft-10 via zkryptium 0.6; the `BbsCiphersuite` parameter
 > (only `Bls12381Sha256` in v1) and the FFI isolation contain future draft churn.
+>
+> **BBS header vs presentation header.** `Sign`/`Verify`/`DeriveProof`/`VerifyProof` take an
+> optional `header` (default empty): data the *signer* binds at sign time and that every
+> derived proof commits — the holder cannot drop or alter it (e.g. the W3C `bbs-2023`
+> cryptosuite binds its mandatory-disclosure group here). It is distinct from the
+> `presentationHeader` (`ph`) on `DeriveProof`/`VerifyProof`, which the *holder* chooses at
+> derive time (typically the verifier's challenge).
 
 ## Native BBS library and the supported "BBS-absent" mode
 

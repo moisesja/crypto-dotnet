@@ -88,7 +88,8 @@ public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
     }
 
     /// <inheritdoc />
-    public byte[] Sign(ReadOnlySpan<byte> privateKey, IReadOnlyList<byte[]> messages)
+    public byte[] Sign(ReadOnlySpan<byte> privateKey, IReadOnlyList<byte[]> messages,
+        ReadOnlySpan<byte> header = default)
     {
         ArgumentNullException.ThrowIfNull(messages);
         EnsureNativeAvailable();
@@ -109,7 +110,7 @@ public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
 
         rc = ZkryptiumNative.bbs_sign(
             privateKey, pk,
-            ReadOnlySpan<byte>.Empty, 0,
+            header, (nuint)header.Length,
             encodedMessages, (nuint)encodedMessages.Length,
             signature);
 
@@ -120,7 +121,8 @@ public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
     }
 
     /// <inheritdoc />
-    public bool Verify(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> signature, IReadOnlyList<byte[]> messages)
+    public bool Verify(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> signature, IReadOnlyList<byte[]> messages,
+        ReadOnlySpan<byte> header = default)
     {
         ArgumentNullException.ThrowIfNull(messages);
         EnsureNativeAvailable();
@@ -134,7 +136,7 @@ public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
 
         var rc = ZkryptiumNative.bbs_verify(
             publicKey,
-            ReadOnlySpan<byte>.Empty, 0,
+            header, (nuint)header.Length,
             encodedMessages, (nuint)encodedMessages.Length,
             signature);
 
@@ -147,7 +149,8 @@ public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
         byte[] signature,
         IReadOnlyList<byte[]> messages,
         IReadOnlyList<int> revealedIndices,
-        ReadOnlySpan<byte> nonce)
+        ReadOnlySpan<byte> presentationHeader,
+        ReadOnlySpan<byte> header = default)
     {
         ArgumentNullException.ThrowIfNull(signature);
         ArgumentNullException.ThrowIfNull(messages);
@@ -188,8 +191,8 @@ public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
         var rc = ZkryptiumNative.bbs_proof_gen(
             publicKey,
             signature,
-            ReadOnlySpan<byte>.Empty, 0,
-            nonce, (nuint)nonce.Length,
+            header, (nuint)header.Length,
+            presentationHeader, (nuint)presentationHeader.Length,
             encodedMessages, (nuint)encodedMessages.Length,
             encodedIndices, (nuint)encodedIndices.Length,
             proofBuf, (nuint)proofBuf.Length,
@@ -207,7 +210,8 @@ public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
         byte[] proof,
         IReadOnlyList<byte[]> revealedMessages,
         IReadOnlyList<int> revealedIndices,
-        ReadOnlySpan<byte> nonce)
+        ReadOnlySpan<byte> presentationHeader,
+        ReadOnlySpan<byte> header = default)
     {
         ArgumentNullException.ThrowIfNull(proof);
         ArgumentNullException.ThrowIfNull(revealedMessages);
@@ -223,8 +227,8 @@ public sealed class DefaultBbsCryptoProvider : IBbsCryptoProvider
         var rc = ZkryptiumNative.bbs_proof_verify(
             publicKey,
             proof, (nuint)proof.Length,
-            ReadOnlySpan<byte>.Empty, 0,
-            nonce, (nuint)nonce.Length,
+            header, (nuint)header.Length,
+            presentationHeader, (nuint)presentationHeader.Length,
             encodedMessages, (nuint)encodedMessages.Length,
             encodedIndices, (nuint)encodedIndices.Length);
 

@@ -86,28 +86,84 @@ public interface IBbsCryptoProvider
     /// </summary>
     bool IsAvailable { get; }
 
-    /// <summary>Sign an ordered set of messages using a BLS12-381 G2 private key.</summary>
-    byte[] Sign(ReadOnlySpan<byte> privateKey, IReadOnlyList<byte[]> messages);
+    /// <summary>
+    /// Sign an ordered set of messages using a BLS12-381 G2 private key.
+    /// </summary>
+    /// <param name="privateKey">32-byte BLS12-381 secret scalar.</param>
+    /// <param name="messages">The ordered set of messages to sign.</param>
+    /// <param name="header">
+    /// Optional BBS signature <c>header</c> (draft-irtf-cfrg-bbs-signatures). Fixed by the
+    /// signer at sign time and bound into the signature: <see cref="Verify"/> and any derived
+    /// proof only succeed when the same <paramref name="header"/> is supplied. Application data
+    /// committed here cannot be dropped or altered by the holder — e.g. the W3C <c>bbs-2023</c>
+    /// cryptosuite binds its mandatory-disclosure group into the header. Distinct from the
+    /// <c>presentationHeader</c> on <see cref="DeriveProof"/>/<see cref="VerifyProof"/>, which the
+    /// holder chooses at derive time. Defaults to empty (no header bound).
+    /// </param>
+    byte[] Sign(ReadOnlySpan<byte> privateKey, IReadOnlyList<byte[]> messages,
+        ReadOnlySpan<byte> header = default);
 
-    /// <summary>Verify a BBS signature against the full set of messages.</summary>
-    bool Verify(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> signature, IReadOnlyList<byte[]> messages);
+    /// <summary>
+    /// Verify a BBS signature against the full set of messages.
+    /// </summary>
+    /// <param name="publicKey">96-byte BLS12-381 G2 public key.</param>
+    /// <param name="signature">The 80-byte BBS signature to verify.</param>
+    /// <param name="messages">The full ordered set of messages that was signed.</param>
+    /// <param name="header">
+    /// The same BBS signature <c>header</c> that was supplied to <see cref="Sign"/>. Verification
+    /// fails (returns <c>false</c>) if it differs from the header bound at sign time. Defaults to
+    /// empty.
+    /// </param>
+    bool Verify(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> signature, IReadOnlyList<byte[]> messages,
+        ReadOnlySpan<byte> header = default);
 
     /// <summary>
     /// Derive a zero-knowledge proof that selectively discloses only the messages
     /// at the specified indices, without revealing the original signature.
     /// </summary>
+    /// <param name="publicKey">96-byte BLS12-381 G2 public key of the signer.</param>
+    /// <param name="signature">The 80-byte BBS signature over <paramref name="messages"/>.</param>
+    /// <param name="messages">The full ordered set of signed messages.</param>
+    /// <param name="revealedIndices">Indices of the messages to disclose; must be distinct and in range.</param>
+    /// <param name="presentationHeader">
+    /// The BBS presentation header (<c>ph</c>) — chosen by the holder at derive time, typically the
+    /// verifier's challenge/nonce so a captured proof cannot be replayed. Bound into the proof and
+    /// must be supplied unchanged to <see cref="VerifyProof"/>. Distinct from
+    /// <paramref name="header"/>.
+    /// </param>
+    /// <param name="header">
+    /// The same BBS signature <c>header</c> that was bound at <see cref="Sign"/> time. It is
+    /// committed by the derived proof, so <see cref="VerifyProof"/> fails unless the same value is
+    /// supplied there. Defaults to empty.
+    /// </param>
     byte[] DeriveProof(
         ReadOnlySpan<byte> publicKey,
         byte[] signature,
         IReadOnlyList<byte[]> messages,
         IReadOnlyList<int> revealedIndices,
-        ReadOnlySpan<byte> nonce);
+        ReadOnlySpan<byte> presentationHeader,
+        ReadOnlySpan<byte> header = default);
 
-    /// <summary>Verify a derived proof against the revealed messages.</summary>
+    /// <summary>
+    /// Verify a derived proof against the revealed messages.
+    /// </summary>
+    /// <param name="publicKey">96-byte BLS12-381 G2 public key of the signer.</param>
+    /// <param name="proof">The proof bytes produced by <see cref="DeriveProof"/>.</param>
+    /// <param name="revealedMessages">Only the disclosed messages, in the order of their indices.</param>
+    /// <param name="revealedIndices">The indices the proof discloses, matching <paramref name="revealedMessages"/>.</param>
+    /// <param name="presentationHeader">
+    /// The BBS presentation header (<c>ph</c>) that was supplied to <see cref="DeriveProof"/>.
+    /// Verification fails if it differs.
+    /// </param>
+    /// <param name="header">
+    /// The BBS signature <c>header</c> bound at <see cref="Sign"/>/<see cref="DeriveProof"/> time.
+    /// Verification fails if it differs from the header committed by the proof. Defaults to empty.
+    /// </param>
     bool VerifyProof(
         ReadOnlySpan<byte> publicKey,
         byte[] proof,
         IReadOnlyList<byte[]> revealedMessages,
         IReadOnlyList<int> revealedIndices,
-        ReadOnlySpan<byte> nonce);
+        ReadOnlySpan<byte> presentationHeader,
+        ReadOnlySpan<byte> header = default);
 }
