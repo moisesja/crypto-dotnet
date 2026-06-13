@@ -141,6 +141,7 @@ Migrate `IBbsCryptoProvider`, `DefaultBbsCryptoProvider`, `ZkryptiumNative` (int
 3. Add to `IBbsCryptoProvider`: `BbsCiphersuite Ciphersuite { get; }` and `bool IsAvailable { get; }`.
 4. `DefaultBbsCryptoProvider` gains constructor parameter `BbsCiphersuite ciphersuite = BbsCiphersuite.Bls12381Sha256`; any other value throws `NotSupportedException` naming the unsupported suite.
 5. Define `public sealed class BbsUnavailableException : System.Security.Cryptography.CryptographicException`, carrying the original native-load error as `InnerException`. All five BBS operations throw it (instead of the current generic throw) when the native library failed to load. `IsAvailable` returns the probe result and never throws.
+6. Expose the BBS signature **`header`** on `IBbsCryptoProvider`/`DefaultBbsCryptoProvider` (issue #2). Add an optional `ReadOnlySpan<byte> header = default` (last parameter) to `Sign`, `Verify`, `DeriveProof`, and `VerifyProof`, threaded into the already-present FFI header arguments (the native `zkryptium-ffi` layer already accepts and consumes it; **no Rust change**). The header is fixed by the signer at sign time and committed by both verification and any derived proof — it lets a consumer bind application data the holder cannot drop or alter (the W3C `bbs-2023` cryptosuite binds its mandatory-disclosure group here). Rename the existing `nonce` parameter on `DeriveProof`/`VerifyProof` to `presentationHeader`: it is the BBS presentation header (`ph`), a value distinct from `header` and chosen by the holder at derive time. Default empty preserves the prior behavior for callers that omit it.
 
 **Acceptance criteria:**
 - [ ] BBS round-trip test passes on a platform with the native library: keygen → sign(3 messages) → verify(true) → DeriveProof(reveal indices {0,2}) → VerifyProof(true); tamper any revealed message → VerifyProof(false).
@@ -148,6 +149,7 @@ Migrate `IBbsCryptoProvider`, `DefaultBbsCryptoProvider`, `ZkryptiumNative` (int
 - [ ] Size invariants asserted: SK 32, PK 96, signature 80 bytes.
 - [ ] With the native library absent (test by running the managed test assembly with no `runtimes/` payload — CI job, FR-22): `IsAvailable == false`; each of the five operations throws `BbsUnavailableException` with non-null `InnerException`; every non-BBS test in the suite still passes.
 - [ ] `new DefaultBbsCryptoProvider((BbsCiphersuite)1)` throws `NotSupportedException`.
+- [ ] Header binding (issue #2): `Sign(sk, msgs, header)` + `Verify(pk, sig, msgs, header)` round-trips for a non-empty header, and `Verify` returns `false` for a different header or the default empty header; `DeriveProof(..., presentationHeader, header)` + `VerifyProof(..., presentationHeader, header)` round-trips, and `VerifyProof` returns `false` when the `header` differs from the one bound at derive time (the header is committed by the proof); the `presentationHeader` and `header` are independently committed. The default empty-header behavior is unchanged for callers that omit it.
 
 ### FR-6 — Key generation
 

@@ -148,6 +148,45 @@ Console.WriteLine($"  Proof valid after tampering with citizenship: {tamperedVal
 Check(!tamperedValid, "VerifyProof returns false for a tampered revealed message");
 Console.WriteLine();
 
+// -------------------------------------------------------
+// 8. Header — bind issuer data the holder CANNOT drop
+// -------------------------------------------------------
+// The presentation header (the `nonce` above) is chosen by the HOLDER
+// at derive time. The signature `header` is different: it is fixed by
+// the ISSUER at sign time and committed by the signature AND every
+// derived proof. Anything bound into the header — e.g. the W3C
+// bbs-2023 cryptosuite binds its mandatory-disclosure group here —
+// cannot be altered or dropped without verification failing.
+//
+// header (issuer, sign time)        != presentationHeader (holder, derive time)
+Console.WriteLine("=== 8. Signature header (issuer-bound) ===");
+
+var header = "bbs-2023:mandatory=[issuer,expiry]"u8.ToArray();
+
+// Issuer signs WITH the header bound in.
+var boundSig = bbs.Sign(keyPair.PrivateKey, messages, header);
+
+// Verifying with the same header succeeds; a different header fails;
+// and omitting the header (the default) fails — proving the header is
+// genuinely committed, not ignored.
+Check(bbs.Verify(keyPair.PublicKey, boundSig, messages, header),
+    "Verify succeeds with the header the issuer bound");
+Check(!bbs.Verify(keyPair.PublicKey, boundSig, messages, "different-header"u8.ToArray()),
+    "Verify fails when the header differs from the one signed");
+Check(!bbs.Verify(keyPair.PublicKey, boundSig, messages),
+    "Verify fails when the header is omitted (default empty) for a header-bound signature");
+
+// The header flows through selective disclosure too: derive a proof
+// under the header, then a verifier checks it with the SAME header.
+var boundProof = bbs.DeriveProof(
+    keyPair.PublicKey, boundSig, messages, revealedIndices, nonce, header);
+Check(bbs.VerifyProof(keyPair.PublicKey, boundProof, revealedMessages, revealedIndices, nonce, header),
+    "VerifyProof succeeds with the matching presentation header and header");
+Check(!bbs.VerifyProof(keyPair.PublicKey, boundProof, revealedMessages, revealedIndices, nonce, "wrong-header"u8.ToArray()),
+    "VerifyProof fails when the header differs from the one bound at derive time");
+Console.WriteLine("  Header is committed by both Verify and the derived proof.");
+Console.WriteLine();
+
 Console.WriteLine("Done! All BBS examples completed successfully.");
 return 0;
 
