@@ -5,11 +5,12 @@ All notable changes to **NetCrypto** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-06-14
 
 Targeting **1.1.0** — additive changes from the didcomm-dotnet → NetCrypto integration (#10, #11, #12).
 
 ### Added
+
 - **`IKeyStore.DeriveSharedSecretAsync(alias, peerPublicKey, ct)`** — a key-agreement (ECDH) operation
   on the key-store abstraction, the encryption-side counterpart to `SignAsync`. It performs ECDH against
   a stored key-agreement private key and returns the **raw shared secret Z** (no KDF applied — the caller
@@ -28,6 +29,7 @@ Targeting **1.1.0** — additive changes from the didcomm-dotnet → NetCrypto i
   from the source of truth instead of a hard-coded table. (#12)
 
 ### Security
+
 - **Wrong-length EC public keys now throw a parameter-named `ArgumentException`.** An adversarial
   review of the new `IKeyStore.DeriveSharedSecretAsync` receive path found that a wrong-length NIST EC
   public/peer key surfaced as an opaque platform `CryptographicException` (or, for an in-range short
@@ -36,11 +38,11 @@ Targeting **1.1.0** — additive changes from the didcomm-dotnet → NetCrypto i
   the SEC1 length against the curve up front (compressed `1+coordLen`, uncompressed `1+2·coordLen`),
   closing the gap for `DeriveSharedSecret` / `IKeyStore.DeriveSharedSecretAsync` and the ECDSA `Verify`
   import path. No invalid-curve weakness was found — off-curve points of the correct length were already
-  rejected with `CryptographicException`; this only tightens the *malformed-length* exception type.
+  rejected with `CryptographicException`; this only tightens the _malformed-length_ exception type.
 - **`JwkConverter.ExtractPublicKey` now documents its on-curve guarantee.** The method already
   validated EC `(x, y)` coordinates against the stated curve (via `EcPointValidator.EnsureOnCurve`)
   before returning; that invalid-curve defense (RFC 7518 §6.2.2) is now stated explicitly in the
-  public XML contract and pinned by a regression test using a *fabricated, self-consistent*
+  public XML contract and pinned by a regression test using a _fabricated, self-consistent_
   (valid-length but off-curve) JWK. Consumers doing `ExtractPublicKey → DeriveSharedSecret` on an
   untrusted `epk` inherit the protection by default rather than relying on undocumented behavior. (#10)
 
@@ -54,6 +56,7 @@ This release also includes the malformed-input security hardening developed as `
 which was never published as a standalone release.
 
 ### Security
+
 - Malformed key inputs now surface as a **parameter-named `ArgumentException`** instead of leaking
   a backend exception type (`System.FormatException` from NSec, `Nethermind.Crypto.Bls+BlsException`,
   or a platform `CryptographicException`). Up-front validation was added at every backend hand-off:
@@ -66,9 +69,11 @@ which was never published as a standalone release.
   exception fails the suite.
 
 ### Changed
+
 - Stabilized to GA `1.0.0` — the package is now a non-prerelease NuGet release.
 
 ### Documentation
+
 - Documented the supported **native platform RID matrix** (`osx-arm64`, `osx-x64`, `linux-x64`,
   `linux-arm64`, `win-x64`) and that the published `.nupkg` ships `runtimes/{rid}/native/`
   transitively, verified by release CI against the packed artifact and a BBS smoke test. (#4)
@@ -80,6 +85,7 @@ which was never published as a standalone release.
 ## [1.0.0-preview.2] - 2026-06-13
 
 ### Added
+
 - Exposed the BBS signature **`header`** parameter on `IBbsCryptoProvider` /
   `DefaultBbsCryptoProvider` (`Sign`, `Verify`, `DeriveProof`, `VerifyProof`) as an optional
   `ReadOnlySpan<byte>` (default empty). The header is fixed by the signer and committed by both
@@ -87,6 +93,7 @@ which was never published as a standalone release.
   `bbs-2023` mandatory-disclosure group) that a holder cannot drop or alter. (#2)
 
 ### Changed
+
 - **Breaking (pre-GA):** renamed the `nonce` parameter on `DeriveProof` / `VerifyProof` to
   `presentationHeader` — it is the BBS presentation header (`ph`), distinct from the new signature
   `header`. Positional callers are unaffected; named-argument (`nonce:`) callers must update.
@@ -97,6 +104,7 @@ Initial preview. NetCrypto consolidates every cryptographic primitive for the Ne
 library stack behind stable interfaces, so no domain library binds directly to a specific backend.
 
 ### Added
+
 - **Key model:** `KeyType` (Ed25519, X25519, P-256/384/521, secp256k1, BLS12-381 G1/G2), `KeyPair`,
   `PublicKeyReference`, and multibase/multicodec encoding (`MultibasePublicKey`) via NetCid.
 - **Signing & verification** (`ICryptoProvider` / `DefaultCryptoProvider`): EdDSA (Ed25519), ECDSA
