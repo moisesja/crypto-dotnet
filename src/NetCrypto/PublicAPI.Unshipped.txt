@@ -1,3 +1,15 @@
 #nullable enable
+const NetCrypto.AesCbcHmacCipher.IvSizeBytes = 16 -> int
+const NetCrypto.AesCbcHmacCipher.KeySizeBytes = 64 -> int
+const NetCrypto.AesCbcHmacCipher.TagSizeBytes = 32 -> int
+const NetCrypto.AesGcmCipher.KeySizeBytes = 32 -> int
+const NetCrypto.AesGcmCipher.NonceSizeBytes = 12 -> int
+const NetCrypto.AesGcmCipher.TagSizeBytes = 16 -> int
+const NetCrypto.XChaCha20Poly1305Cipher.KeySizeBytes = 32 -> int
+const NetCrypto.XChaCha20Poly1305Cipher.NonceSizeBytes = 24 -> int
+const NetCrypto.XChaCha20Poly1305Cipher.TagSizeBytes = 16 -> int
+NetCrypto.Base64Url
 NetCrypto.IKeyStore.DeriveSharedSecretAsync(string! alias, System.ReadOnlyMemory<byte> peerPublicKey, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
 NetCrypto.InMemoryKeyStore.DeriveSharedSecretAsync(string! alias, System.ReadOnlyMemory<byte> peerPublicKey, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
+static NetCrypto.Base64Url.Decode(System.ReadOnlySpan<char> text) -> byte[]!
+static NetCrypto.Base64Url.Encode(System.ReadOnlySpan<byte> data) -> string!

@@ -14,9 +14,14 @@ namespace NetCrypto;
 /// </remarks>
 public static class AesGcmCipher
 {
-    private const int KeySizeBytes = 32;
-    private const int NonceSizeBytes = 12;
-    private const int TagSizeBytes = 16;
+    /// <summary>Key size in bytes for AES-256-GCM (<c>A256GCM</c>): 32.</summary>
+    public const int KeySizeBytes = 32;
+
+    /// <summary>Nonce size in bytes for AES-256-GCM: 12 (96-bit, the JOSE/RFC 7518 §5.3 value).</summary>
+    public const int NonceSizeBytes = 12;
+
+    /// <summary>Authentication-tag size in bytes for AES-256-GCM: 16.</summary>
+    public const int TagSizeBytes = 16;
 
     /// <summary>
     /// Encrypts <paramref name="plaintext"/> with AES-256-GCM.

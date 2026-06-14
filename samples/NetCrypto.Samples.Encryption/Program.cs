@@ -20,13 +20,16 @@ var aad = """{"alg":"dir","enc":"sample"}"""u8.ToArray();
 // 1. AES-256-GCM (JOSE "A256GCM") — key 32, nonce 12, tag 16
 // -------------------------------------------------------
 Console.WriteLine("=== AES-256-GCM (A256GCM) ===");
-Console.WriteLine("  Sizes: key = 32 bytes, nonce = 12 bytes, tag = 16 bytes");
+// Each cipher type publishes its key/nonce/tag sizes as public constants, so a
+// caller allocating the CEK and IV/nonce up front (as a JOSE builder must, before
+// it can call Encrypt) validates against the source of truth instead of a hard-coded table.
+Console.WriteLine($"  Sizes: key = {AesGcmCipher.KeySizeBytes} bytes, nonce = {AesGcmCipher.NonceSizeBytes} bytes, tag = {AesGcmCipher.TagSizeBytes} bytes");
 
 // Keys and nonces come from a cryptographically secure RNG. A GCM nonce
 // must NEVER be reused with the same key — reuse breaks both secrecy and
 // authenticity — so generate a fresh one per message.
-var gcmKey = RandomNumberGenerator.GetBytes(32);
-var gcmNonce = RandomNumberGenerator.GetBytes(12);
+var gcmKey = RandomNumberGenerator.GetBytes(AesGcmCipher.KeySizeBytes);
+var gcmNonce = RandomNumberGenerator.GetBytes(AesGcmCipher.NonceSizeBytes);
 
 var (gcmCiphertext, gcmTag) = AesGcmCipher.Encrypt(gcmKey, gcmNonce, plaintext, aad);
 Console.WriteLine($"  Ciphertext: {gcmCiphertext.Length} bytes (same length as plaintext — GCM is a stream construction)");
@@ -41,13 +44,13 @@ Console.WriteLine();
 // 2. AES-256-CBC + HMAC-SHA-512 (JOSE "A256CBC-HS512") — key 64, IV 16, tag 32
 // -------------------------------------------------------
 Console.WriteLine("=== AES-256-CBC + HMAC-SHA-512 (A256CBC-HS512) ===");
-Console.WriteLine("  Sizes: key = 64 bytes, IV = 16 bytes, tag = 32 bytes");
+Console.WriteLine($"  Sizes: key = {AesCbcHmacCipher.KeySizeBytes} bytes, IV = {AesCbcHmacCipher.IvSizeBytes} bytes, tag = {AesCbcHmacCipher.TagSizeBytes} bytes");
 
 // The 64-byte key is really two keys (RFC 7518 §5.2.2): the first 32 bytes
 // MAC the data (HMAC-SHA-512), the last 32 bytes encrypt it (AES-256-CBC).
 // That is why this AEAD needs twice the key material of the others.
-var cbcKey = RandomNumberGenerator.GetBytes(64);
-var cbcIv = RandomNumberGenerator.GetBytes(16);
+var cbcKey = RandomNumberGenerator.GetBytes(AesCbcHmacCipher.KeySizeBytes);
+var cbcIv = RandomNumberGenerator.GetBytes(AesCbcHmacCipher.IvSizeBytes);
 
 var (cbcCiphertext, cbcTag) = AesCbcHmacCipher.Encrypt(cbcKey, cbcIv, plaintext, aad);
 // CBC pads to a 16-byte block boundary, so the ciphertext grows — unlike GCM/XChaCha.
@@ -62,13 +65,13 @@ Console.WriteLine();
 // 3. XChaCha20-Poly1305 (JOSE "XC20P") — key 32, nonce 24, tag 16
 // -------------------------------------------------------
 Console.WriteLine("=== XChaCha20-Poly1305 (XC20P) ===");
-Console.WriteLine("  Sizes: key = 32 bytes, nonce = 24 bytes, tag = 16 bytes");
+Console.WriteLine($"  Sizes: key = {XChaCha20Poly1305Cipher.KeySizeBytes} bytes, nonce = {XChaCha20Poly1305Cipher.NonceSizeBytes} bytes, tag = {XChaCha20Poly1305Cipher.TagSizeBytes} bytes");
 
 // The 24-byte extended nonce is the whole point of XChaCha20: it is large
 // enough that random nonces have no practical collision risk, so there is
 // no counter to manage — ideal when many parties encrypt under one key.
-var xKey = RandomNumberGenerator.GetBytes(32);
-var xNonce = RandomNumberGenerator.GetBytes(24);
+var xKey = RandomNumberGenerator.GetBytes(XChaCha20Poly1305Cipher.KeySizeBytes);
+var xNonce = RandomNumberGenerator.GetBytes(XChaCha20Poly1305Cipher.NonceSizeBytes);
 
 var (xCiphertext, xTag) = XChaCha20Poly1305Cipher.Encrypt(xKey, xNonce, plaintext, aad);
 Console.WriteLine($"  Ciphertext: {xCiphertext.Length} bytes");
@@ -100,7 +103,27 @@ Check(unwrapped.AsSpan().SequenceEqual(cek), "A256KW Unwrap recovers the origina
 Console.WriteLine();
 
 // -------------------------------------------------------
-// 5. Tampering is detected — the authentication guarantee
+// 5. Base64url — the JOSE byte-to-text boundary
+// -------------------------------------------------------
+Console.WriteLine("=== Base64url (RFC 4648 §5, no padding) ===");
+
+// Every JOSE/JWK field that carries bytes — JWE iv/ciphertext/tag/encrypted_key,
+// JWK x/y/d, apu/apv, signatures — is base64url with NO padding. Base64Url is the
+// foundation's single source of truth for that encoding, so consumers do not each
+// re-implement it and risk a padding/charset divergence.
+var encodedCiphertext = Base64Url.Encode(gcmCiphertext);
+var encodedTag = Base64Url.Encode(gcmTag);
+Console.WriteLine($"  ciphertext (b64url): {encodedCiphertext}");
+Console.WriteLine($"  tag        (b64url): {encodedTag}");
+Check(!encodedTag.Contains('='), "base64url output carries no '=' padding");
+
+// Decode tolerates input with or without padding and round-trips exactly.
+var decodedTag = Base64Url.Decode(encodedTag);
+Check(decodedTag.AsSpan().SequenceEqual(gcmTag), "Base64Url.Decode round-trips the tag bytes");
+Console.WriteLine();
+
+// -------------------------------------------------------
+// 6. Tampering is detected — the authentication guarantee
 // -------------------------------------------------------
 Console.WriteLine("=== Tamper detection ===");
 

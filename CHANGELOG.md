@@ -17,6 +17,14 @@ Targeting **1.1.0** — additive changes from the didcomm-dotnet → NetCrypto i
   non-extractable / HSM-bound key participate in ECDH-based decryption (JOSE `ECDH-ES`/`ECDH-1PU`, DIDComm
   anoncrypt/authcrypt) without the private scalar ever leaving the store. Implemented by `InMemoryKeyStore`
   for X25519, P-256, P-384, and P-521; demonstrated in the `KeyAgreement` sample. (#11)
+- **`Base64Url` codec** — `Base64Url.Encode(ReadOnlySpan<byte>) → string` (RFC 4648 §5, no `=` padding)
+  and `Base64Url.Decode(ReadOnlySpan<char>) → byte[]` (tolerates optional padding), a thin wrapper over the
+  BCL `System.Buffers.Text.Base64Url`. A single source of truth for the JOSE/JWK byte boundary so consumers
+  stop re-implementing it. (#12)
+- **Unified AEAD size metadata** — each content-encryption cipher now exposes its key/nonce/tag sizes as
+  `public const int`: `AesGcmCipher` (32/12/16), `AesCbcHmacCipher` (`KeySizeBytes` 64 / `IvSizeBytes` 16 /
+  `TagSizeBytes` 32), `XChaCha20Poly1305Cipher` (32/24/16). A JOSE builder can size the CEK and IV/nonce
+  from the source of truth instead of a hard-coded table. (#12)
 
 ### Security
 - **`JwkConverter.ExtractPublicKey` now documents its on-curve guarantee.** The method already
