@@ -55,9 +55,24 @@ public static class JwkConverter
     }
 
     /// <summary>
-    /// Extract the key type and raw public key bytes from a JWK.
-    /// Inverse of ToPublicJwk.
+    /// Extract the key type and raw public key bytes from a JWK. Inverse of <see cref="ToPublicJwk(KeyType, byte[])"/>.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>On-curve guarantee.</b> For every EC key type (P-256, P-384, P-521, secp256k1) this method
+    /// validates that the supplied <c>(x, y)</c> coordinates actually lie on the stated curve — via
+    /// <see cref="EcPointValidator.EnsureOnCurve"/> — <em>before</em> returning, throwing
+    /// <see cref="CryptographicException"/> for an off-curve, out-of-range, or identity point. This makes
+    /// the import boundary the chokepoint for the invalid-curve defense (RFC 7518 §6.2.2; Antipa et al.,
+    /// PKC 2003; Jager–Schwenk–Somorovsky, ESORICS 2015), so a consumer that does
+    /// <c>ExtractPublicKey → ICryptoProvider.DeriveSharedSecret</c> on an attacker-supplied JWK (e.g. a
+    /// JWE <c>epk</c>) inherits the protection by default and need not remember a separate validation call.
+    /// OKP curves (Ed25519, X25519) carry no off-curve points by construction, so the check is a no-op for them.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="CryptographicException">An EC JWK whose coordinates are off-curve, out of range,
+    /// or the point at infinity.</exception>
+    /// <exception cref="ArgumentException">The JWK is null-coordinate, malformed, or of an unsupported key type/curve.</exception>
     public static (KeyType KeyType, byte[] PublicKey) ExtractPublicKey(JsonWebKey jwk)
     {
         ArgumentNullException.ThrowIfNull(jwk);

@@ -5,6 +5,18 @@ All notable changes to **NetCrypto** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Targeting **1.1.0** — additive changes from the didcomm-dotnet → NetCrypto integration (#10, #11, #12).
+
+### Security
+- **`JwkConverter.ExtractPublicKey` now documents its on-curve guarantee.** The method already
+  validated EC `(x, y)` coordinates against the stated curve (via `EcPointValidator.EnsureOnCurve`)
+  before returning; that invalid-curve defense (RFC 7518 §6.2.2) is now stated explicitly in the
+  public XML contract and pinned by a regression test using a *fabricated, self-consistent*
+  (valid-length but off-curve) JWK. Consumers doing `ExtractPublicKey → DeriveSharedSecret` on an
+  untrusted `epk` inherit the protection by default rather than relying on undocumented behavior. (#10)
+
 ## [1.0.0] - 2026-06-13
 
 First stable (GA) release. The public API is frozen: `PublicAPI.Shipped.txt` is the
