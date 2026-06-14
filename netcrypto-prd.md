@@ -177,6 +177,12 @@ Migrate `JwkConverter` verbatim (`ToPublicJwk(KeyType, byte[])`, `ToPublicJwk(Ke
 - [ ] Migrated tests under `tests/NetDid.Core.Tests/Jwk/` pass unmodified.
 - [ ] Round-trip per supported key type: raw key → JWK → `ExtractPublicKey` → identical bytes + `KeyType`.
 - [ ] `ToPrivateJwk` includes `d`; `ToPublicJwk` output contains no private material (assert `D == null`).
+- [ ] **On-curve guarantee (invalid-curve defense, RFC 7518 §6.2.2):** `ExtractPublicKey` validates every
+  EC point against the stated curve via `EcPointValidator.EnsureOnCurve` **before** returning, throwing
+  `CryptographicException` for an off-curve / out-of-range / identity point. The guarantee is stated in the
+  method's XML doc and covered by a regression test using a *fabricated, self-consistent* (valid-length but
+  off-curve) JWK — so consumers doing `ExtractPublicKey → DeriveSharedSecret` on an untrusted `epk` inherit
+  the defense by default.
 
 ### FR-9 — Dependency-injection registration
 

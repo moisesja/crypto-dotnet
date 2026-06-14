@@ -140,6 +140,34 @@ public class EcPointValidatorTests
     [InlineData("P-384", 48)]
     [InlineData("P-521", 66)]
     [InlineData("secp256k1", 32)]
+    public void ExtractPublicKey_ArbitraryForgedJwk_Throws(string crv, int coordLen)
+    {
+        // Issue #10 acceptance criterion: a forged-but-self-consistent EC JWK — valid coordinate
+        // lengths, but (x, y) = (2, 3) is fabricated and not derived from any real point, so it does
+        // not satisfy the curve equation. This is the genuine invalid-curve case (an attacker minting
+        // an `epk` from scratch), distinct from bit-flipping a legitimate point. ExtractPublicKey must
+        // reject it at the import boundary, not just a separate EnsureOnCurve call.
+        var x = new byte[coordLen];
+        x[^1] = 2;
+        var y = new byte[coordLen];
+        y[^1] = 3;
+        var jwk = new JsonWebKey
+        {
+            Kty = "EC",
+            Crv = crv,
+            X = Multibase.Encode(x, MultibaseEncoding.Base64Url, includePrefix: false),
+            Y = Multibase.Encode(y, MultibaseEncoding.Base64Url, includePrefix: false)
+        };
+
+        var act = () => JwkConverter.ExtractPublicKey(jwk);
+        act.Should().Throw<CryptographicException>().WithMessage("*not on the stated curve*");
+    }
+
+    [Theory]
+    [InlineData("P-256", 32)]
+    [InlineData("P-384", 48)]
+    [InlineData("P-521", 66)]
+    [InlineData("secp256k1", 32)]
     public void ExtractPublicKey_IdentityJwk_Throws(string crv, int coordLen)
     {
         var zero = new byte[coordLen];
