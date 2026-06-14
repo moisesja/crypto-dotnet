@@ -97,4 +97,30 @@ public class Base64UrlTests
         var act = () => Base64Url.Decode("not-valid-base64!!");
         act.Should().Throw<FormatException>();
     }
+
+    [Theory]
+    [InlineData("QU JD")]     // internal space
+    [InlineData(" QUJD")]     // leading space
+    [InlineData("QUJD ")]     // trailing space
+    [InlineData("Q\tUJD")]    // tab
+    [InlineData("\nQUJD\n")]  // CR/LF (PEM-style)
+    [InlineData("    ")]      // all whitespace — must NOT decode to an empty array
+    public void Decode_Whitespace_Throws(string input)
+    {
+        // Adversarial finding (#12): the bare BCL decoder silently strips ASCII whitespace, mapping
+        // several wire forms to the same bytes. A canonical JOSE primitive must reject it instead.
+        var act = () => Base64Url.Decode(input);
+        act.Should().Throw<FormatException>();
+    }
+
+    [Fact]
+    public void Decode_StandardBase64Alphabet_Throws()
+    {
+        // '+' and '/' are the standard-base64 (RFC 4648 §4) characters; the url-safe decoder must reject
+        // them, accepting only '-' and '_' for indices 62/63.
+        var plus = () => Base64Url.Decode("ab+c");
+        var slash = () => Base64Url.Decode("ab/c");
+        plus.Should().Throw<FormatException>();
+        slash.Should().Throw<FormatException>();
+    }
 }

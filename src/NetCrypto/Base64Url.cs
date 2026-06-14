@@ -8,7 +8,10 @@ namespace NetCrypto;
 /// </summary>
 /// <remarks>
 /// Thin wrapper over the BCL <see cref="System.Buffers.Text.Base64Url"/>. <see cref="Encode"/> never
-/// emits <c>=</c> padding; <see cref="Decode"/> accepts input with or without trailing padding.
+/// emits <c>=</c> padding. <see cref="Decode"/> tolerates input with or without trailing <c>=</c> padding,
+/// but is otherwise strict: it rejects any character outside the base64url alphabet — including ASCII
+/// whitespace (space, tab, CR, LF), which the bare BCL decoder would silently strip. A canonical JOSE
+/// primitive must not map several wire forms to the same bytes, so whitespace is treated as invalid input.
 /// </remarks>
 public static class Base64Url
 {
@@ -18,10 +21,29 @@ public static class Base64Url
     public static string Encode(ReadOnlySpan<byte> data) =>
         System.Buffers.Text.Base64Url.EncodeToString(data);
 
-    /// <summary>Decode base64url (RFC 4648 §5) text, tolerating input with or without <c>=</c> padding.</summary>
+    /// <summary>
+    /// Decode base64url (RFC 4648 §5) text, tolerating input with or without trailing <c>=</c> padding.
+    /// Whitespace and any other character outside the base64url alphabet are rejected (not stripped).
+    /// </summary>
     /// <param name="text">The base64url text to decode. A <see cref="string"/> converts implicitly.</param>
     /// <returns>The decoded bytes.</returns>
-    /// <exception cref="System.FormatException">If <paramref name="text"/> is not valid base64url.</exception>
-    public static byte[] Decode(ReadOnlySpan<char> text) =>
-        System.Buffers.Text.Base64Url.DecodeFromChars(text);
+    /// <exception cref="System.FormatException">If <paramref name="text"/> contains a character outside the
+    /// base64url alphabet (including whitespace) or is otherwise not valid base64url.</exception>
+    public static byte[] Decode(ReadOnlySpan<char> text)
+    {
+        // The BCL decoder strips ASCII whitespace before decoding, so "QU JD", "\nQUJD\n", and "QUJD" all
+        // decode to the same bytes. For a JOSE/JWK primitive that is a charset divergence — reject any
+        // non-alphabet character up front so each byte string has exactly one accepted textual form
+        // (modulo the documented optional padding, whose placement the BCL still validates).
+        foreach (char c in text)
+        {
+            bool inAlphabet =
+                (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                c == '-' || c == '_' || c == '=';
+            if (!inAlphabet)
+                throw new FormatException("Input contains a character outside the base64url alphabet.");
+        }
+
+        return System.Buffers.Text.Base64Url.DecodeFromChars(text);
+    }
 }

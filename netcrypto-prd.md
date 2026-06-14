@@ -301,7 +301,9 @@ it lands in the foundation package because that module does not exist yet.
 - [ ] Each AEAD cipher type exposes its key/nonce/tag sizes as public constants, asserted against the
   bytes the cipher actually accepts and produces (a key one byte short of `KeySizeBytes` is rejected).
 - [ ] `Base64Url` round-trips the RFC 7515 Appendix A.1 JOSE vector, emits no `=` padding, uses the
-  URL-safe alphabet (`-`/`_`), tolerates padded input on decode, and throws `FormatException` on invalid input.
+  URL-safe alphabet (`-`/`_`), tolerates padded input on decode, and throws `FormatException` on invalid
+  input — including **whitespace** and any non-alphabet character (strict; the bare BCL decoder would
+  silently strip whitespace, which a canonical JOSE primitive must not).
 
 ### FR-17 — Developer examples (`samples/`)
 
