@@ -18,9 +18,14 @@ namespace NetCrypto;
 /// </remarks>
 public static class AesCbcHmacCipher
 {
-    private const int KeySizeBytes = 64;
-    private const int IvSizeBytes = 16;
-    private const int TagSizeBytes = 32;
+    /// <summary>Key size in bytes for A256CBC-HS512: 64 (MAC_KEY ‖ ENC_KEY, 32 bytes each — RFC 7518 §5.2.2.1).</summary>
+    public const int KeySizeBytes = 64;
+
+    /// <summary>AES-CBC initialization-vector size in bytes for A256CBC-HS512: 16.</summary>
+    public const int IvSizeBytes = 16;
+
+    /// <summary>Authentication-tag size in bytes for A256CBC-HS512: 32 (the leftmost half of the HMAC-SHA-512 output).</summary>
+    public const int TagSizeBytes = 32;
 
     /// <summary>
     /// Encrypts <paramref name="plaintext"/> per RFC 7518 §5.2.2.1 (A256CBC-HS512).

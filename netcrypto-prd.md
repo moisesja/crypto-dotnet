@@ -278,6 +278,33 @@ New thin extension (modeled on `NetDid.Extensions.DependencyInjection`): `public
 - [ ] Key length ≠ 32 or nonce length ≠ 24 → `ArgumentException`.
 - [ ] Round-trip property test (random key/nonce/AAD, plaintext lengths 0–4096) is identity.
 
+### FR-16b — AEAD size metadata & base64url codec (1.1.0 ergonomics, issue #12)
+
+Two shared-primitive ergonomics gaps every JOSE/DIDComm consumer otherwise re-implements locally.
+
+**G5 — unified AEAD size metadata.** Each content-encryption cipher type exposes its key/nonce/tag
+sizes as `public const int` so a JOSE builder can allocate the CEK and IV/nonce **before** calling
+`Encrypt` and validate against the source of truth instead of a hard-coded table:
+`AesGcmCipher` (`KeySizeBytes` 32, `NonceSizeBytes` 12, `TagSizeBytes` 16), `AesCbcHmacCipher`
+(`KeySizeBytes` 64, `IvSizeBytes` 16, `TagSizeBytes` 32), `XChaCha20Poly1305Cipher`
+(`KeySizeBytes` 32, `NonceSizeBytes` 24, `TagSizeBytes` 16). The IV/nonce name follows each cipher's
+own parameter (CBC has an IV; GCM/XChaCha have a nonce).
+
+**G4 — base64url codec.** `public static class Base64Url` provides `Encode(ReadOnlySpan<byte>) → string`
+(RFC 4648 §5, no `=` padding) and `Decode(ReadOnlySpan<char>) → byte[]` (tolerates optional padding),
+a thin wrapper over the BCL `System.Buffers.Text.Base64Url`. This is the single source of truth for the
+JOSE/JWK byte boundary (headers, signatures, JWE `iv`/`ciphertext`/`tag`/`encrypted_key`, JWK
+`x`/`y`/`d`, `apu`/`apv`). Placement note: base64url arguably belongs in a future JOSE-enveloping module;
+it lands in the foundation package because that module does not exist yet.
+
+**Acceptance criteria:**
+- [ ] Each AEAD cipher type exposes its key/nonce/tag sizes as public constants, asserted against the
+  bytes the cipher actually accepts and produces (a key one byte short of `KeySizeBytes` is rejected).
+- [ ] `Base64Url` round-trips the RFC 7515 Appendix A.1 JOSE vector, emits no `=` padding, uses the
+  URL-safe alphabet (`-`/`_`), tolerates padded input on decode, and throws `FormatException` on invalid
+  input — including **whitespace** and any non-alphabet character (strict; the bare BCL decoder would
+  silently strip whitespace, which a canonical JOSE primitive must not).
+
 ### FR-17 — Developer examples (`samples/`)
 
 Every public API is exemplified by simple, runnable programs under `samples/`, following the `net-did` `samples/` convention. This is the developer learning path: a developer must be able to learn correct usage of any public API by reading samples alone, **never** by reading unit or integration tests.

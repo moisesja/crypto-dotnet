@@ -17,9 +17,14 @@ namespace NetCrypto;
 /// </remarks>
 public static class XChaCha20Poly1305Cipher
 {
-    private const int KeySizeBytes = 32;
-    private const int NonceSizeBytes = 24;
-    private const int TagSizeBytes = 16;
+    /// <summary>Key size in bytes for XChaCha20-Poly1305 (<c>XC20P</c>): 32.</summary>
+    public const int KeySizeBytes = 32;
+
+    /// <summary>Nonce size in bytes for XChaCha20-Poly1305: 24 (the extended nonce, safe to choose at random).</summary>
+    public const int NonceSizeBytes = 24;
+
+    /// <summary>Poly1305 authentication-tag size in bytes for XChaCha20-Poly1305: 16.</summary>
+    public const int TagSizeBytes = 16;
 
     private static readonly AeadAlgorithm Algorithm = AeadAlgorithm.XChaCha20Poly1305;
 
