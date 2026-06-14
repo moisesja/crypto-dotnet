@@ -101,7 +101,20 @@ public sealed class InMemoryKeyStore : IKeyStore
 
         // The stored private scalar is read here but never returned: only the raw shared secret Z
         // leaves the store, mirroring SignAsync. A real HSM-backed store runs the agreement in-enclave.
-        var z = _cryptoProvider.DeriveSharedSecret(entry.KeyPair.KeyType, entry.KeyPair.PrivateKey, peerPublicKey.Span);
+        byte[] z;
+        try
+        {
+            z = _cryptoProvider.DeriveSharedSecret(entry.KeyPair.KeyType, entry.KeyPair.PrivateKey, peerPublicKey.Span);
+        }
+        catch (ArgumentException ex) when (ex.ParamName == "publicKey")
+        {
+            // The provider validates the peer key under its own parameter name ("publicKey"). Re-surface
+            // it under THIS method's parameter so the caller sees the argument it actually passed; the
+            // provider's detailed message is preserved on the inner exception. (A non-ECDH stored key
+            // throws with ParamName "keyType" and is intentionally left to propagate unchanged.)
+            throw new ArgumentException(
+                "The peer public key is invalid for the stored key's algorithm.", nameof(peerPublicKey), ex);
+        }
         return Task.FromResult(z);
     }
 

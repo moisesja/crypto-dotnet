@@ -118,3 +118,35 @@ backend exception to `ArgumentException(paramName)`. Never pin a backend-excepti
 green — fix src. Write the assertion as `WithParameterName(...)`, not merely "threw something in a
 set." Probe each backend's actual failure type on bad input on every supported OS (the macOS EC
 exception differs from Windows/Linux), since "in contract on my machine" can hide a leak elsewhere.
+
+## L6 — "It's just a thin wrapper/delegation" is NOT a license to skip the adversarial pass
+
+**Context:** Implementing the NetCrypto 1.1.0 issues (#10 on-curve doc, #11 IKeyStore ECDH, #12
+base64url + AEAD constants), I shipped all three PRs and declared them done WITHOUT running the
+adversarial agents CLAUDE.md §2 and lesson L4 mandate. For #11 I explicitly rationalized the
+omission — "the new path delegates to the existing, already-tested DeriveSharedSecret, it adds no
+new crypto" — and skipped the exploit pass on that basis. The user caught it ("Did you ever run
+adversary agents? Did you follow CLAUDE.md?"). When I then ran three adversarial agents (write-and-run
+exploit code, per L4), the "thin" code yielded two real LOW findings: `Base64Url.Decode` silently
+stripped ASCII whitespace (multiple wire forms → same bytes, contradicting the documented "throws on
+invalid input" and the canonical-codec goal), and wrong-length NIST EC peer keys leaked a platform
+`CryptographicException` instead of the NFR-3 parameter-named `ArgumentException` (a gap my own #11
+XML doc had promised was closed). Neither was exploitable, but both were genuine contract defects in
+exactly the code I'd dismissed as too trivial to attack.
+
+**Rule:** "Thin wrapper", "just delegates", "no new crypto" is precisely the rationalization L4 warns
+against — it describes where the NEW surface is, not where the RISK is. A wrapper inherits the
+backend's *exception* and *canonicalization* behavior, which is part of the public contract and is
+frequently wrong at the seam (whitespace stripping, opaque backend exception types, length confusion).
+The adversarial pass is part of the definition of done for ANY security-relevant change, including
+delegations and codecs — not a follow-up, and never waived by self-assessed triviality. Run it BEFORE
+declaring done, not after the user asks.
+
+**How to apply:** For every security-relevant change — including thin wrappers, delegations, codecs,
+and "just exposing a constant" — launch adversarial subagent(s) that WRITE AND RUN exploit code
+against the built artifact, with an explicit "break this, report every weakness" framing and a
+concrete attack list, BEFORE saying it's done. Especially probe the seam the wrapper delegates across:
+exception TYPE on malformed/wrong-length input (must be parameter-named `ArgumentException`, never a
+leaked backend/platform exception), and input CANONICALIZATION (does the codec accept multiple textual
+forms for the same bytes?). If you catch yourself writing "it's just a thin X so I'll skip the
+adversarial pass," that sentence is the trigger to run it, not skip it. See [[L4]], [[L5]].

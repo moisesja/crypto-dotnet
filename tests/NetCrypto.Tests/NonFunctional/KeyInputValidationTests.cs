@@ -157,6 +157,33 @@ public class KeyInputValidationTests
         act.Should().Throw<ArgumentException>().WithParameterName("privateKey");
     }
 
+    // A wrong-length EC PUBLIC (peer) key is a caller bug, not a point-validity failure: it must throw a
+    // parameter-named ArgumentException, not the opaque platform CryptographicException that
+    // ImportParameters / decompression would otherwise raise (NFR-3; lesson L5). This is the receive-side
+    // counterpart to the wrong-length-private-key guard above, and underpins the IKeyStore.DeriveSharedSecretAsync
+    // contract. (Off-curve / out-of-range points of the CORRECT length remain a CryptographicException.)
+    [Theory]
+    [InlineData(KeyType.P256, 0x02, 32)]   // compressed valid length is 1 + 32 = 33
+    [InlineData(KeyType.P256, 0x02, 34)]
+    [InlineData(KeyType.P256, 0x04, 64)]   // uncompressed valid length is 1 + 64 = 65
+    [InlineData(KeyType.P256, 0x04, 66)]
+    [InlineData(KeyType.P384, 0x02, 48)]   // compressed valid = 49
+    [InlineData(KeyType.P384, 0x04, 96)]   // uncompressed valid = 97
+    [InlineData(KeyType.P521, 0x02, 66)]   // compressed valid = 67
+    [InlineData(KeyType.P521, 0x04, 132)]  // uncompressed valid = 133
+    public void DeriveSharedSecret_Nist_WrongLengthPublicKey_ThrowsArgumentExceptionWithParameterName(
+        KeyType keyType, int prefix, int totalLen)
+    {
+        var validPrivate = Generator.Generate(keyType).PrivateKey;
+
+        // Valid SEC1 prefix so the input reaches the length check rather than the format check.
+        var publicKey = new byte[totalLen];
+        publicKey[0] = (byte)prefix;
+
+        var act = () => Provider.DeriveSharedSecret(keyType, validPrivate, publicKey);
+        act.Should().Throw<ArgumentException>().WithParameterName("publicKey");
+    }
+
     // A correctly-sized but out-of-range NIST scalar (D = 0, or D >= the curve order n — here the
     // all-0xFF maximum) is not a valid private key. It must surface as a parameter-named
     // ArgumentException, not the opaque platform CryptographicException ImportParameters would

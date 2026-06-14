@@ -28,6 +28,15 @@ Targeting **1.1.0** — additive changes from the didcomm-dotnet → NetCrypto i
   from the source of truth instead of a hard-coded table. (#12)
 
 ### Security
+- **Wrong-length EC public keys now throw a parameter-named `ArgumentException`.** An adversarial
+  review of the new `IKeyStore.DeriveSharedSecretAsync` receive path found that a wrong-length NIST EC
+  public/peer key surfaced as an opaque platform `CryptographicException` (or, for an in-range short
+  coordinate, could be silently accepted as a different point) instead of the parameter-named
+  `ArgumentException` the NFR-3 contract requires. `DefaultCryptoProvider.ImportEcPublicKey` now validates
+  the SEC1 length against the curve up front (compressed `1+coordLen`, uncompressed `1+2·coordLen`),
+  closing the gap for `DeriveSharedSecret` / `IKeyStore.DeriveSharedSecretAsync` and the ECDSA `Verify`
+  import path. No invalid-curve weakness was found — off-curve points of the correct length were already
+  rejected with `CryptographicException`; this only tightens the *malformed-length* exception type.
 - **`JwkConverter.ExtractPublicKey` now documents its on-curve guarantee.** The method already
   validated EC `(x, y)` coordinates against the stated curve (via `EcPointValidator.EnsureOnCurve`)
   before returning; that invalid-curve defense (RFC 7518 §6.2.2) is now stated explicitly in the

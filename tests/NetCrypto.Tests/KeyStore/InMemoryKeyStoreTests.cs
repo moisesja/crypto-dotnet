@@ -168,6 +168,24 @@ public class InMemoryKeyStoreTests
     }
 
     [Fact]
+    public async Task DeriveSharedSecretAsync_WrongLengthPeerKey_ThrowsArgumentExceptionWithParameterName()
+    {
+        // The DeriveSharedSecretAsync contract documents that a malformed peerPublicKey throws
+        // ArgumentException (not the opaque platform CryptographicException). 0x02 || 31 bytes is a
+        // wrong-length compressed P-256 key (a valid one is 33 bytes). The store re-surfaces the
+        // provider's validation under THIS method's parameter name so the caller sees the argument it
+        // passed (L5: assert WithParameterName, not merely that something threw).
+        var bob = _keyGen.Generate(KeyType.P256);
+        await _store.ImportAsync("bob", bob);
+
+        var malformed = new byte[32];
+        malformed[0] = 0x02;
+
+        var act = () => _store.DeriveSharedSecretAsync("bob", malformed);
+        await act.Should().ThrowAsync<ArgumentException>().WithParameterName("peerPublicKey");
+    }
+
+    [Fact]
     public async Task DeriveSharedSecretAsync_NonEcdhKeyType_Throws()
     {
         // Ed25519 is a signature key, not ECDH-capable; the store surfaces the provider's ArgumentException.
