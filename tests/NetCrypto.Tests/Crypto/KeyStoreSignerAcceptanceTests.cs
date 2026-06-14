@@ -111,6 +111,9 @@ public class KeyStoreSignerAcceptanceTests
         public Task<ISigner> CreateSignerAsync(string alias, CancellationToken ct = default)
             => throw Forbidden(nameof(CreateSignerAsync));
 
+        public Task<byte[]> DeriveSharedSecretAsync(string alias, ReadOnlyMemory<byte> peerPublicKey, CancellationToken ct = default)
+            => throw Forbidden(nameof(DeriveSharedSecretAsync));
+
         public Task<IReadOnlyList<string>> ListAsync(CancellationToken ct = default)
             => throw Forbidden(nameof(ListAsync));
 

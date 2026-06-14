@@ -136,9 +136,10 @@ static void Check(bool condition, string what)
     Environment.Exit(1);
 }
 
-// A minimal IKeyStore showing the full seven-member contract. A real
+// A minimal IKeyStore showing the full eight-member contract. A real
 // implementation would keep the key inside an HSM/keychain/vault, but the
-// shape stays the same: private keys go in, only signatures come out.
+// shape stays the same: private keys go in, only signatures and shared
+// secrets come out.
 sealed class MiniKeyStore(IKeyGenerator keyGen, ICryptoProvider crypto) : IKeyStore
 {
     // alias -> key material. Private field — never handed to callers.
@@ -159,6 +160,11 @@ sealed class MiniKeyStore(IKeyGenerator keyGen, ICryptoProvider crypto) : IKeySt
     // The single signing door: data in, signature out, key stays put.
     public Task<byte[]> SignAsync(string alias, ReadOnlyMemory<byte> data, CancellationToken ct = default)
         => Task.FromResult(crypto.Sign(_keys[alias].KeyType, _keys[alias].PrivateKey, data.Span));
+
+    // The key-agreement door: a peer public key in, only the raw ECDH Z out — the
+    // private scalar never leaves the store, just like SignAsync.
+    public Task<byte[]> DeriveSharedSecretAsync(string alias, ReadOnlyMemory<byte> peerPublicKey, CancellationToken ct = default)
+        => Task.FromResult(crypto.DeriveSharedSecret(_keys[alias].KeyType, _keys[alias].PrivateKey, peerPublicKey.Span));
 
     // KeyStoreSigner needs only public facts; its SignAsync calls back here.
     public Task<ISigner> CreateSignerAsync(string alias, CancellationToken ct = default)
