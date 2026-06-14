@@ -259,16 +259,32 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
 
     internal static ECParameters ImportEcPublicKey(ReadOnlySpan<byte> publicKey, ECCurve curve)
     {
+        // Validate the encoded length against THIS curve up front. Without it, a wrong-length body
+        // either fails deep inside decompression / ImportParameters as an opaque, platform-specific
+        // CryptographicException, or — for an in-range short coordinate — is silently accepted as a
+        // different point. Both violate NFR-3: a wrong-length caller input is a caller bug and must
+        // surface as a parameter-named ArgumentException (lesson L5), mirroring the private-key
+        // RawKeyGuard on the signing side. Off-curve / out-of-range points of the CORRECT length are
+        // still a CryptographicException (a genuine point-validity failure), thrown below.
+        var coordLen = EcCoordinateByteLength(curve);
+
         if (publicKey.Length > 0 && (publicKey[0] == 0x02 || publicKey[0] == 0x03))
         {
-            // Compressed SEC1 point — decompress via SubjectPublicKeyInfo import
+            // Compressed SEC1 point: 0x02/0x03 || X.
+            if (publicKey.Length != 1 + coordLen)
+                throw new ArgumentException(
+                    $"Compressed EC public key must be {1 + coordLen} bytes for this curve, got {publicKey.Length}.",
+                    nameof(publicKey));
             return DecompressEcPoint(publicKey, curve);
         }
 
         if (publicKey.Length > 0 && publicKey[0] == 0x04)
         {
-            // Uncompressed: 0x04 || x || y
-            var coordLen = (publicKey.Length - 1) / 2;
+            // Uncompressed: 0x04 || x || y.
+            if (publicKey.Length != 1 + 2 * coordLen)
+                throw new ArgumentException(
+                    $"Uncompressed EC public key must be {1 + 2 * coordLen} bytes for this curve, got {publicKey.Length}.",
+                    nameof(publicKey));
             var x = publicKey.Slice(1, coordLen).ToArray();
             var y = publicKey.Slice(1 + coordLen, coordLen).ToArray();
 
@@ -283,7 +299,17 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
             };
         }
 
-        throw new ArgumentException("Invalid EC public key format. Expected compressed (0x02/0x03) or uncompressed (0x04) SEC1 point.");
+        throw new ArgumentException(
+            "Invalid EC public key format. Expected compressed (0x02/0x03) or uncompressed (0x04) SEC1 point.",
+            nameof(publicKey));
+    }
+
+    // Byte length of one big-endian coordinate for an EC curve (P-256 = 32, P-384 = 48, P-521 = 66),
+    // derived from the curve prime so a single GetCurveParams entry drives both validation and decode.
+    private static int EcCoordinateByteLength(ECCurve curve)
+    {
+        var (p, _) = GetCurveParams(curve);
+        return (int)((p.GetBitLength() + 7) / 8);
     }
 
     // NIST P-256 curve parameters for point decompression
