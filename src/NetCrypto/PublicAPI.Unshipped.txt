@@ -1,1 +1,3 @@
 #nullable enable
+NetCrypto.IKeyStore.DeriveSharedSecretAsync(string! alias, System.ReadOnlyMemory<byte> peerPublicKey, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
+NetCrypto.InMemoryKeyStore.DeriveSharedSecretAsync(string! alias, System.ReadOnlyMemory<byte> peerPublicKey, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!

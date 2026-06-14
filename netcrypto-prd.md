@@ -162,12 +162,21 @@ Migrate `DefaultKeyGenerator` verbatim: `Generate`/`FromPrivateKey`/`FromPublicK
 
 ### FR-7 — Signing and key-store abstractions
 
-Migrate `ISigner`, `KeyPairSigner`, `KeyStoreSigner`, `IKeyStore` (all seven members: `GenerateAsync`, `ImportAsync`, `GetInfoAsync`, `SignAsync`, `CreateSignerAsync`, `ListAsync`, `DeleteAsync`) verbatim, including null-argument guards and the HSM-first doc language.
+Migrate `ISigner`, `KeyPairSigner`, `KeyStoreSigner`, `IKeyStore` (the original seven members: `GenerateAsync`, `ImportAsync`, `GetInfoAsync`, `SignAsync`, `CreateSignerAsync`, `ListAsync`, `DeleteAsync`) verbatim, including null-argument guards and the HSM-first doc language.
+
+**Key agreement (issue #11, 1.1.0):** `IKeyStore` gains an eighth member —
+`DeriveSharedSecretAsync(string alias, ReadOnlyMemory<byte> peerPublicKey, CancellationToken)` — the
+key-agreement counterpart to `SignAsync`. It performs ECDH against a stored key-agreement private key
+and returns the **raw shared secret Z** (no KDF; the caller still owns the Concat-KDF/HKDF step,
+consistent with `ICryptoProvider.DeriveSharedSecret`), so a non-extractable (e.g. HSM-bound) key can
+participate in ECDH-based decryption (JOSE `ECDH-ES`/`ECDH-1PU`, DIDComm anoncrypt/authcrypt). The
+private scalar never leaves the store.
 
 **Acceptance criteria:**
 - [ ] Migrated tests (incl. `tests/NetDid.Core.Tests/KeyStore/`) pass unmodified.
 - [ ] `KeyPairSigner.SignAsync` output verifies via `ICryptoProvider.Verify` for Ed25519 and P-256.
 - [ ] A test-double `IKeyStore` proves `KeyStoreSigner` never reads private key material (signature delegated; only alias + public key held).
+- [ ] `IKeyStore.DeriveSharedSecretAsync` returns a Z byte-for-byte identical to `ICryptoProvider.DeriveSharedSecret` for the extractable equivalent, across **X25519, P-256, P-384, P-521**, without exposing the private scalar; a non-ECDH stored key throws `ArgumentException`, an unknown alias throws `KeyNotFoundException`.
 
 ### FR-8 — JWK conversion
 

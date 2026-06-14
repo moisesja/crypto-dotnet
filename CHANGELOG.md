@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Targeting **1.1.0** — additive changes from the didcomm-dotnet → NetCrypto integration (#10, #11, #12).
 
+### Added
+- **`IKeyStore.DeriveSharedSecretAsync(alias, peerPublicKey, ct)`** — a key-agreement (ECDH) operation
+  on the key-store abstraction, the encryption-side counterpart to `SignAsync`. It performs ECDH against
+  a stored key-agreement private key and returns the **raw shared secret Z** (no KDF applied — the caller
+  still owns the Concat-KDF/HKDF step, matching `ICryptoProvider.DeriveSharedSecret`). This lets a
+  non-extractable / HSM-bound key participate in ECDH-based decryption (JOSE `ECDH-ES`/`ECDH-1PU`, DIDComm
+  anoncrypt/authcrypt) without the private scalar ever leaving the store. Implemented by `InMemoryKeyStore`
+  for X25519, P-256, P-384, and P-521; demonstrated in the `KeyAgreement` sample. (#11)
+
 ### Security
 - **`JwkConverter.ExtractPublicKey` now documents its on-curve guarantee.** The method already
   validated EC `(x, y)` coordinates against the stated curve (via `EcPointValidator.EnsureOnCurve`)

@@ -92,6 +92,20 @@ public sealed class InMemoryKeyStore : IKeyStore
     }
 
     /// <inheritdoc />
+    public Task<byte[]> DeriveSharedSecretAsync(string alias, ReadOnlyMemory<byte> peerPublicKey, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(alias);
+
+        if (!_keys.TryGetValue(alias, out var entry))
+            throw new KeyNotFoundException($"Key alias '{alias}' not found.");
+
+        // The stored private scalar is read here but never returned: only the raw shared secret Z
+        // leaves the store, mirroring SignAsync. A real HSM-backed store runs the agreement in-enclave.
+        var z = _cryptoProvider.DeriveSharedSecret(entry.KeyPair.KeyType, entry.KeyPair.PrivateKey, peerPublicKey.Span);
+        return Task.FromResult(z);
+    }
+
+    /// <inheritdoc />
     public Task<IReadOnlyList<string>> ListAsync(CancellationToken ct = default)
     {
         IReadOnlyList<string> aliases = _keys.Keys.ToList();

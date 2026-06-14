@@ -73,6 +73,25 @@ Check(aliceZp.AsSpan().SequenceEqual(bobZp), "P-256 raw Z matches on both sides"
 Console.WriteLine();
 
 // -------------------------------------------------------
+// 3c. Key-store-bound ECDH — IKeyStore.DeriveSharedSecretAsync
+// -------------------------------------------------------
+Console.WriteLine("=== Key-store-bound ECDH (IKeyStore.DeriveSharedSecretAsync) ===");
+
+// When the recipient's key-agreement private key lives in a key store
+// (an HSM, an OS keychain), it must never be extracted to run ECDH.
+// DeriveSharedSecretAsync performs the agreement INSIDE the store and
+// returns only the raw Z — byte-for-byte identical to what the extractable
+// DeriveSharedSecret computes above, but the private scalar stays put.
+// This is the encryption-side counterpart to IKeyStore.SignAsync.
+var keyStore = new InMemoryKeyStore(keyGen, crypto);
+await keyStore.ImportAsync("bob-p256", bobP); // Bob's P-256 pair now lives in the store
+
+var bobZstore = await keyStore.DeriveSharedSecretAsync("bob-p256", aliceP.PublicKey);
+Console.WriteLine($"  Bob Z via store ({bobZstore.Length} bytes): {Convert.ToHexString(bobZstore)}");
+Check(bobZstore.AsSpan().SequenceEqual(bobZp), "store-bound Z equals the raw DeriveSharedSecret Z (scalar never left the store)");
+Console.WriteLine();
+
+// -------------------------------------------------------
 // 3b. EcPointValidator — the invalid-curve attack defense
 // -------------------------------------------------------
 Console.WriteLine("=== EcPointValidator.EnsureOnCurve ===");

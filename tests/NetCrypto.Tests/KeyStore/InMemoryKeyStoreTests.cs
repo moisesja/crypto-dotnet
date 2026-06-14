@@ -117,6 +117,67 @@ public class InMemoryKeyStoreTests
         await act.Should().ThrowAsync<KeyNotFoundException>();
     }
 
+    // -------- Key agreement (ECDH) — issue #11 --------
+
+    [Theory]
+    [InlineData(KeyType.X25519)]
+    [InlineData(KeyType.P256)]
+    [InlineData(KeyType.P384)]
+    [InlineData(KeyType.P521)]
+    public async Task DeriveSharedSecretAsync_MatchesRawDeriveSharedSecret_BothDirections(KeyType keyType)
+    {
+        // Acceptance criterion: a non-extractable key-agreement key in the store must produce the
+        // same raw Z as ICryptoProvider.DeriveSharedSecret would for the extractable equivalent.
+        var alice = _keyGen.Generate(keyType); // remote peer (extractable, for reference)
+        var bob = _keyGen.Generate(keyType);   // recipient — lives in the store
+        await _store.ImportAsync("bob", bob);
+
+        var zFromStore = await _store.DeriveSharedSecretAsync("bob", alice.PublicKey);
+
+        // 1. Equals what the raw provider computes from Bob's extracted scalar.
+        var zRaw = _crypto.DeriveSharedSecret(keyType, bob.PrivateKey, alice.PublicKey);
+        zFromStore.Should().Equal(zRaw);
+
+        // 2. Equals Alice's independent derivation — i.e. the two parties agree.
+        var zAlice = _crypto.DeriveSharedSecret(keyType, alice.PrivateKey, bob.PublicKey);
+        zFromStore.Should().Equal(zAlice);
+    }
+
+    [Fact]
+    public async Task DeriveSharedSecretAsync_NeverExposesPrivateScalar()
+    {
+        // The store yields a correct Z, yet the only key material it surfaces is the public key.
+        var bob = _keyGen.Generate(KeyType.P256);
+        var peer = _keyGen.Generate(KeyType.P256);
+        await _store.ImportAsync("bob", bob);
+
+        var z = await _store.DeriveSharedSecretAsync("bob", peer.PublicKey);
+        z.Should().NotBeEmpty();
+
+        var info = await _store.GetInfoAsync("bob");
+        info!.PublicKey.Should().Equal(bob.PublicKey); // public key only — StoredKeyInfo carries no private material
+    }
+
+    [Fact]
+    public async Task DeriveSharedSecretAsync_NonExistentKey_Throws()
+    {
+        var peer = _keyGen.Generate(KeyType.P256);
+
+        var act = () => _store.DeriveSharedSecretAsync("nonexistent", peer.PublicKey);
+        await act.Should().ThrowAsync<KeyNotFoundException>();
+    }
+
+    [Fact]
+    public async Task DeriveSharedSecretAsync_NonEcdhKeyType_Throws()
+    {
+        // Ed25519 is a signature key, not ECDH-capable; the store surfaces the provider's ArgumentException.
+        var ed = _keyGen.Generate(KeyType.Ed25519);
+        await _store.ImportAsync("signing-key", ed);
+
+        var act = () => _store.DeriveSharedSecretAsync("signing-key", new byte[32]);
+        await act.Should().ThrowAsync<ArgumentException>();
+    }
+
     [Fact]
     public async Task ListAsync_ReturnsAllAliases()
     {
