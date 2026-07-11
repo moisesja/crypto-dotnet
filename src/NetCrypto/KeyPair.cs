@@ -121,7 +121,9 @@ public sealed class KeyPair : IDisposable
     /// until the callback returns, and a borrow that starts after disposal throws
     /// <see cref="ObjectDisposedException"/> instead of reading zeroed bytes. Keep the callback
     /// short — it runs under a per-instance lock, so borrows of the same key pair are serialized
-    /// and a disposal waits behind them.
+    /// and a disposal waits behind them. For the same reason, avoid borrowing or disposing a
+    /// <em>different</em> key pair from inside the callback: two threads nesting borrows of the
+    /// same two pairs in opposite orders would deadlock.
     /// </remarks>
     /// <typeparam name="T">The callback's result type.</typeparam>
     /// <param name="use">Callback that receives the private key bytes.</param>

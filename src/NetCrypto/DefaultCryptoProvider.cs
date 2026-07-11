@@ -235,8 +235,7 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
         // parameter-named ArgumentException matches the BLS/secp256k1 paths (NFR-3 consistency).
         // Compared as fixed-length big-endian bytes rather than through BigInteger, which would
         // put an unwipeable copy of the private scalar on the managed heap (issue #17).
-        var order = EcCurveOrderBytes(curve);
-        if (privateKey.IndexOfAnyExcept((byte)0) < 0 || privateKey.SequenceCompareTo(order) >= 0)
+        if (!IsScalarInRange(privateKey, EcCurveOrderBytes(curve)))
             throw new ArgumentException(
                 "EC private key scalar is out of range (must satisfy 0 < D < n).", nameof(privateKey));
 
@@ -245,6 +244,25 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
             Curve = curve,
             D = privateKey.ToArray()
         };
+    }
+
+    // Constant-time 0 < d < n over same-length big-endian buffers (the length guard above
+    // guarantees d.Length == n.Length). A short-circuiting compare (SequenceCompareTo /
+    // IndexOfAnyExcept) would leak, via timing, how long a prefix of the secret scalar matches
+    // the public order; this instead runs a full-width borrow-propagating subtract d − n (a
+    // borrow left at the end ⇔ d < n) and OR-accumulates d's bytes (d ≠ 0), with no
+    // data-dependent branches or early exits.
+    private static bool IsScalarInRange(ReadOnlySpan<byte> d, ReadOnlySpan<byte> n)
+    {
+        var borrow = 0;
+        var nonZero = 0;
+        for (var i = d.Length - 1; i >= 0; i--)
+        {
+            var diff = d[i] - n[i] - borrow;
+            borrow = (diff >> 8) & 1; // arithmetic shift: 1 exactly when the byte subtraction went negative
+            nonZero |= d[i];
+        }
+        return (borrow == 1) & (nonZero != 0);
     }
 
     // NIST EC private-key scalar length (field byte length) for the supported curves.
