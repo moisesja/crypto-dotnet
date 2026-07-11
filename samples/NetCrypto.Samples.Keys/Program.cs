@@ -146,6 +146,33 @@ Check(!KeyType.P256.IsValidEcPoint(offCurve), "off-curve point rejected");
 Check(KeyType.Ed25519.IsValidEcPoint(ed25519.PublicKey), "non-EC types skip point validation");
 Console.WriteLine();
 
+// -------------------------------------------------------
+// 6. Zeroization — a KeyPair owns its secret's lifecycle
+// -------------------------------------------------------
+Console.WriteLine("=== 6. Zeroization — WithPrivateKey borrow and Dispose ===");
+
+// Reading KeyPair.PrivateKey clones the secret onto the heap on every access,
+// and each clone lingers until the GC collects it. When you only need to *use*
+// the key (sign, derive, export), borrow it instead: WithPrivateKey lends the
+// canonical copy as a ReadOnlySpan for the duration of a callback — no copy is
+// created, so there is nothing new to wipe afterwards.
+var ephemeral = keyGenerator.Generate(KeyType.Ed25519);
+var borrowedLength = ephemeral.WithPrivateKey(privateKey => privateKey.Length);
+Console.WriteLine($"  Borrowed private key ({borrowedLength} bytes) without cloning it");
+
+// When the key is no longer needed, Dispose zeroizes the key material
+// deterministically instead of leaving it for the GC. (This is best-effort
+// defense-in-depth: copies you already took via PrivateKey are your own to
+// clear with CryptographicOperations.ZeroMemory.)
+ephemeral.Dispose();
+var destroyed = false;
+try { _ = ephemeral.PrivateKey; }
+catch (ObjectDisposedException) { destroyed = true; }
+Console.WriteLine("  Disposed: key material wiped, further access throws");
+Check(destroyed, "disposed KeyPair refuses to hand out key material");
+Check(borrowedLength == 32, "borrow saw the real 32-byte Ed25519 seed");
+Console.WriteLine();
+
 Console.WriteLine("Done! All key examples completed successfully.");
 return 0;
 

@@ -30,8 +30,9 @@ using NetCrypto;
 var keyGen = new DefaultKeyGenerator();
 var crypto = new DefaultCryptoProvider();
 
-var keyPair = keyGen.Generate(KeyType.Ed25519);
-byte[] signature = crypto.Sign(keyPair.KeyType, keyPair.PrivateKey, data);
+using var keyPair = keyGen.Generate(KeyType.Ed25519); // Dispose zeroizes the key material
+byte[] signature = keyPair.WithPrivateKey(            // borrow the secret — no heap copy escapes
+    privateKey => crypto.Sign(keyPair.KeyType, privateKey, data));
 bool valid = crypto.Verify(keyPair.KeyType, keyPair.PublicKey, data, signature);
 
 Console.WriteLine(keyPair.MultibasePublicKey); // z6Mk... (multicodec + base58btc)

@@ -13,3 +13,8 @@ NetCrypto.IKeyStore.DeriveSharedSecretAsync(string! alias, System.ReadOnlyMemory
 NetCrypto.InMemoryKeyStore.DeriveSharedSecretAsync(string! alias, System.ReadOnlyMemory<byte> peerPublicKey, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
 static NetCrypto.Base64Url.Decode(System.ReadOnlySpan<char> text) -> byte[]!
 static NetCrypto.Base64Url.Encode(System.ReadOnlySpan<byte> data) -> string!
+NetCrypto.InMemoryKeyStore.Dispose() -> void
+NetCrypto.KeyPair.Dispose() -> void
+NetCrypto.KeyPair.WithPrivateKey<T>(System.Func<System.ReadOnlySpan<byte>, T>! use) -> T
+NetCrypto.KeyPairSigner.Dispose() -> void
+NetCrypto.KeyPairSigner.KeyPairSigner(NetCrypto.KeyPair! keyPair, NetCrypto.ICryptoProvider! crypto, bool ownsKeyPair) -> void

@@ -46,11 +46,24 @@ public static class JwkConverter
     }
 
     /// <summary>Convert a KeyPair to a JWK that includes private key material.</summary>
+    /// <remarks>
+    /// The private key leaves this method as the JWK's base64url <c>d</c> <em>string</em>, which
+    /// managed code cannot wipe — only take this egress when a serialized private JWK is genuinely
+    /// required. The transient byte copy read from the key pair is zeroized before returning.
+    /// </remarks>
     public static JsonWebKey ToPrivateJwk(KeyPair keyPair)
     {
         ArgumentNullException.ThrowIfNull(keyPair);
         var jwk = ToPublicJwk(keyPair);
-        jwk.D = Multibase.Encode(keyPair.PrivateKey, MultibaseEncoding.Base64Url, includePrefix: false);
+        var privateKey = keyPair.PrivateKey;
+        try
+        {
+            jwk.D = Multibase.Encode(privateKey, MultibaseEncoding.Base64Url, includePrefix: false);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(privateKey);
+        }
         return jwk;
     }
 

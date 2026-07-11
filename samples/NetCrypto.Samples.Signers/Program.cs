@@ -21,6 +21,9 @@ Console.WriteLine("=== 1. KeyPairSigner (raw key in memory) ===");
 
 // When you already hold raw key material (ephemeral keys, dev setups),
 // KeyPairSigner puts a KeyPair + ICryptoProvider behind the ISigner door.
+// The signer OWNS the pair by default: disposing the signer zeroizes the
+// wrapped key. Pass ownsKeyPair: false if the pair's lifecycle is managed
+// elsewhere and the signer should not destroy it on Dispose.
 var keyPair = keyGen.Generate(KeyType.Ed25519);
 ISigner pairSigner = new KeyPairSigner(keyPair, crypto);
 
