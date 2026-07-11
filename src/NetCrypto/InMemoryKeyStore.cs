@@ -5,11 +5,21 @@ namespace NetCrypto;
 /// <summary>
 /// Dictionary-backed key store for unit tests and development. NOT for production use.
 /// </summary>
-public sealed class InMemoryKeyStore : IKeyStore
+/// <remarks>
+/// The store owns the private key material it holds: <see cref="DeleteAsync"/> zeroizes the
+/// evicted key pair (delete destroys the key, it does not merely unlist it) and
+/// <see cref="Dispose"/> zeroizes every remaining pair. Consequently a <see cref="KeyPair"/>
+/// handed to <see cref="ImportAsync"/> is owned by the store from that point on — do not keep
+/// using it independently, and do not import the same instance under two aliases. Deleting or
+/// disposing concurrently with an in-flight operation on the same alias is a race the caller
+/// must avoid.
+/// </remarks>
+public sealed class InMemoryKeyStore : IKeyStore, IDisposable
 {
     private readonly ConcurrentDictionary<string, (KeyPair KeyPair, StoredKeyInfo Info)> _keys = new();
     private readonly IKeyGenerator _keyGenerator;
     private readonly ICryptoProvider _cryptoProvider;
+    private volatile bool _disposed;
 
     /// <summary>Creates an in-memory key store backed by the given key generator and crypto provider.</summary>
     public InMemoryKeyStore(IKeyGenerator keyGenerator, ICryptoProvider cryptoProvider)
@@ -22,6 +32,7 @@ public sealed class InMemoryKeyStore : IKeyStore
     public Task<StoredKeyInfo> GenerateAsync(string alias, KeyType keyType, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(alias);
+        ObjectDisposedException.ThrowIf(_disposed, this);
 
         var keyPair = _keyGenerator.Generate(keyType);
         var info = new StoredKeyInfo
@@ -32,7 +43,11 @@ public sealed class InMemoryKeyStore : IKeyStore
         };
 
         if (!_keys.TryAdd(alias, (keyPair, info)))
+        {
+            // The freshly generated pair never escaped — destroy it rather than orphan it.
+            keyPair.Dispose();
             throw new InvalidOperationException($"Key alias '{alias}' already exists.");
+        }
 
         return Task.FromResult(info);
     }
@@ -42,6 +57,7 @@ public sealed class InMemoryKeyStore : IKeyStore
     {
         ArgumentException.ThrowIfNullOrEmpty(alias);
         ArgumentNullException.ThrowIfNull(keyPair);
+        ObjectDisposedException.ThrowIf(_disposed, this);
 
         var info = new StoredKeyInfo
         {
@@ -60,6 +76,7 @@ public sealed class InMemoryKeyStore : IKeyStore
     public Task<StoredKeyInfo?> GetInfoAsync(string alias, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(alias);
+        ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (_keys.TryGetValue(alias, out var entry))
             return Task.FromResult<StoredKeyInfo?>(entry.Info);
@@ -71,11 +88,15 @@ public sealed class InMemoryKeyStore : IKeyStore
     public Task<byte[]> SignAsync(string alias, ReadOnlyMemory<byte> data, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(alias);
+        ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (!_keys.TryGetValue(alias, out var entry))
             throw new KeyNotFoundException($"Key alias '{alias}' not found.");
 
-        var signature = _cryptoProvider.Sign(entry.KeyPair.KeyType, entry.KeyPair.PrivateKey, data.Span);
+        // Borrow instead of reading KeyPair.PrivateKey: the clone-per-read getter would leave one
+        // unzeroed private-key copy on the heap per signature.
+        var signature = entry.KeyPair.WithPrivateKey(
+            privateKey => _cryptoProvider.Sign(entry.KeyPair.KeyType, privateKey, data.Span));
         return Task.FromResult(signature);
     }
 
@@ -83,6 +104,7 @@ public sealed class InMemoryKeyStore : IKeyStore
     public Task<ISigner> CreateSignerAsync(string alias, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(alias);
+        ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (!_keys.TryGetValue(alias, out var entry))
             throw new KeyNotFoundException($"Key alias '{alias}' not found.");
@@ -95,6 +117,7 @@ public sealed class InMemoryKeyStore : IKeyStore
     public Task<byte[]> DeriveSharedSecretAsync(string alias, ReadOnlyMemory<byte> peerPublicKey, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(alias);
+        ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (!_keys.TryGetValue(alias, out var entry))
             throw new KeyNotFoundException($"Key alias '{alias}' not found.");
@@ -104,7 +127,8 @@ public sealed class InMemoryKeyStore : IKeyStore
         byte[] z;
         try
         {
-            z = _cryptoProvider.DeriveSharedSecret(entry.KeyPair.KeyType, entry.KeyPair.PrivateKey, peerPublicKey.Span);
+            z = entry.KeyPair.WithPrivateKey(
+                privateKey => _cryptoProvider.DeriveSharedSecret(entry.KeyPair.KeyType, privateKey, peerPublicKey.Span));
         }
         catch (ArgumentException ex) when (ex.ParamName == "publicKey")
         {
@@ -121,6 +145,8 @@ public sealed class InMemoryKeyStore : IKeyStore
     /// <inheritdoc />
     public Task<IReadOnlyList<string>> ListAsync(CancellationToken ct = default)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
         IReadOnlyList<string> aliases = _keys.Keys.ToList();
         return Task.FromResult(aliases);
     }
@@ -129,8 +155,28 @@ public sealed class InMemoryKeyStore : IKeyStore
     public Task<bool> DeleteAsync(string alias, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(alias);
+        ObjectDisposedException.ThrowIf(_disposed, this);
 
-        var removed = _keys.TryRemove(alias, out _);
+        var removed = _keys.TryRemove(alias, out var entry);
+        if (removed)
+            entry.KeyPair.Dispose(); // delete destroys the key material, not just the directory entry
         return Task.FromResult(removed);
+    }
+
+    /// <summary>
+    /// Zeroizes every stored key pair and marks the store disposed. Idempotent; subsequent
+    /// operations throw <see cref="ObjectDisposedException"/>.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+
+        foreach (var alias in _keys.Keys)
+        {
+            if (_keys.TryRemove(alias, out var entry))
+                entry.KeyPair.Dispose();
+        }
     }
 }

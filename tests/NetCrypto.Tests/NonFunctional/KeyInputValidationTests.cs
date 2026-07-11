@@ -224,6 +224,71 @@ public class KeyInputValidationTests
         yield return max;
     }
 
+    // ── EC scalar range boundaries: 0 < D < n pinned exactly at the curve order ──
+    // The range check compares fixed-length big-endian bytes constant-time (no BigInteger, no
+    // short-circuit — issue #17 / PR #18 review). These boundaries pin the compare to EXACTLY n:
+    // an off-by-one in either direction, or a signed-byte comparison, flips one of them.
+    // Orders hardcoded from FIPS 186-4 / SEC 2 as an oracle independent of the implementation.
+
+    private static readonly Dictionary<KeyType, byte[]> CurveOrders = new()
+    {
+        [KeyType.P256] = Convert.FromHexString(
+            "FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551"),
+        [KeyType.P384] = Convert.FromHexString(
+            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF581A0DB248B0A77AECEC196ACCC52973"),
+        [KeyType.P521] = Convert.FromHexString(
+            "01FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFA51868783BF2F966B7FCC0148F709A5D03BB5C9B8899C47AEBB6FB71E91386409"),
+    };
+
+    // Big-endian fixed-length increment/decrement (the orders are odd primes, so no full wrap).
+    private static byte[] PlusOne(byte[] value)
+    {
+        var result = (byte[])value.Clone();
+        for (var i = result.Length - 1; i >= 0 && ++result[i] == 0; i--) { }
+        return result;
+    }
+
+    private static byte[] MinusOne(byte[] value)
+    {
+        var result = (byte[])value.Clone();
+        for (var i = result.Length - 1; i >= 0 && --result[i] == 0xFF; i--) { }
+        return result;
+    }
+
+    [Theory]
+    [InlineData(KeyType.P256)]
+    [InlineData(KeyType.P384)]
+    [InlineData(KeyType.P521)]
+    public void Sign_Nist_ScalarAtOrAboveOrder_ThrowsArgumentExceptionWithParameterName(KeyType keyType)
+    {
+        foreach (var d in new[] { CurveOrders[keyType], PlusOne(CurveOrders[keyType]) })
+        {
+            var act = () => Provider.Sign(keyType, d, [1, 2, 3]);
+            act.Should().Throw<ArgumentException>().WithParameterName("privateKey",
+                "D = n and D = n + 1 are out of range");
+        }
+    }
+
+    [Theory]
+    [InlineData(KeyType.P256)]
+    [InlineData(KeyType.P384)]
+    [InlineData(KeyType.P521)]
+    public void Sign_Nist_MinAndMaxValidScalars_ProduceVerifiableSignatures(KeyType keyType)
+    {
+        // D = 1 and D = n − 1 are the extreme VALID scalars; the range check must accept them and
+        // the resulting signature must verify against the key's own public point.
+        var one = new byte[CurveOrders[keyType].Length];
+        one[^1] = 1;
+
+        foreach (var d in new[] { one, MinusOne(CurveOrders[keyType]) })
+        {
+            var pair = Generator.FromPrivateKey(keyType, d);
+            var signature = Provider.Sign(keyType, d, [1, 2, 3]);
+            Provider.Verify(keyType, pair.PublicKey, [1, 2, 3], signature).Should().BeTrue(
+                "D = 1 and D = n − 1 are valid scalars and must sign correctly");
+        }
+    }
+
     // ── Sanity: valid keys still round-trip after the new guards ──
 
     [Theory]

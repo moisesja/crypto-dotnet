@@ -336,6 +336,64 @@ Every public API is exemplified by simple, runnable programs under `samples/`, f
 - [ ] `samples/README.md` exists and indexes exactly the ten projects.
 - [ ] The BBS sample run in the no-native CI leg (FR-20) exits 0 and prints the unavailable-mode path.
 
+### FR-18 — Memory hygiene: deterministic zeroization of asymmetric key material (1.2.0, issue #17)
+
+Private key bytes and seed-derived intermediates loaded into managed memory are wiped
+deterministically when their owner is done with them, not left for the GC. Additive and
+backward-compatible: callers that never dispose keep the pre-1.2.0 behavior exactly. This FR
+extends the FR-1/FR-7 surface of `KeyPair`, `InMemoryKeyStore`, and `KeyPairSigner` (the
+"byte-identical to net-did" parity statements in those FRs predate it).
+
+1. **`KeyPair : IDisposable`.** `Dispose()` zeroizes the private and public backing arrays via
+   `CryptographicOperations.ZeroMemory`; it is idempotent; subsequent key-material access
+   (`PrivateKey`, `PublicKey`, `MultibasePublicKey`, `ToPublicJwk`, `ToPrivateJwk`,
+   `WithPrivateKey`) throws `ObjectDisposedException` (`KeyType` stays readable). The canonical
+   private-key copy lives in a **pinned** allocation (`GC.AllocateArray(pinned: true)`) so a
+   compacting GC cannot duplicate the secret before the wipe.
+2. **Borrow API.** `T KeyPair.WithPrivateKey<T>(Func<ReadOnlySpan<byte>, T> use)` lends the
+   canonical copy as a span — no heap copy escapes, so repeated use does not multiply unzeroed
+   clones. The `PrivateKey` clone getter remains for compatibility; its XML docs point at the
+   borrow API as the preferred path.
+3. **`InMemoryKeyStore : IDisposable`.** `Dispose()` zeroizes every stored pair; `DeleteAsync`
+   disposes the evicted pair (delete destroys the key, not just the directory entry);
+   `SignAsync`/`DeriveSharedSecretAsync` use the borrow API; a duplicate-alias `GenerateAsync`
+   disposes the orphaned fresh pair. The store owns imported pairs (documented); disposing or
+   deleting concurrently with an in-flight operation on the same alias is a documented caller
+   race to avoid.
+4. **`KeyPairSigner : IDisposable`.** Owns-and-disposes the wrapped pair by default; a
+   three-argument constructor overload (`ownsKeyPair: false`) makes it non-owning. `SignAsync`
+   uses the borrow API.
+5. **Generator/provider intermediates wiped in `finally`:** the Ed25519 expanded scalar and
+   clamped X25519 scalar in `DeriveX25519FromEd25519` (stack-allocated and cleared), exported
+   NSec private blobs, `ECParameters.D` after every platform import (`DefaultCryptoProvider`
+   sign/ECDH and generator restore paths), secp256k1 stack buffers, the BLS IKM and `ToBendian()`
+   scalar copies, and `JwkConverter.ToPrivateJwk`'s transient clone. The EC scalar range check
+   compares fixed-length big-endian bytes instead of materializing the scalar in an unwipeable
+   `BigInteger`.
+
+**Honesty rule (docs):** managed-memory zeroization is best-effort — JIT spills, caller-held
+clones, and strings (JWK `d`) are outside the library's control; the XML docs of `KeyPair`,
+`WithPrivateKey`, and `ToPrivateJwk` state this explicitly.
+
+**Acceptance criteria:**
+- [ ] Disposing a `KeyPair` zeroizes the backing store (asserted via reflection) and makes
+  key-material access throw `ObjectDisposedException`; double-dispose is a no-op; a
+  never-disposed pair behaves exactly as before (clone-per-read).
+- [ ] `WithPrivateKey` lends the canonical pinned copy by reference (no clone — asserted by
+  reference identity), returns the callback result, and throws `ArgumentNullException(nameof(use))`
+  for a null callback.
+- [ ] `InMemoryKeyStore.DeleteAsync` zeroizes the evicted pair; `Dispose` zeroizes all pairs and
+  subsequent operations throw `ObjectDisposedException`.
+- [ ] `KeyPairSigner` disposal destroys the wrapped pair by default and leaves it alive with
+  `ownsKeyPair: false`; post-dispose members throw.
+- [ ] No internal NetCrypto code path reads `KeyPair.PrivateKey` without a matching wipe
+  (`JwkConverter.ToPrivateJwk` is the only remaining reader and wipes its clone).
+- [ ] The pinned backing array is not relocated by a forced compacting GC (fixed-pointer
+  stability test).
+- [ ] Every `Generate`/`FromPrivateKey` key type round-trips and its backing store zeroes on
+  dispose (all 8 key types).
+- [ ] Public surface changes are additive only (PublicAPI.Unshipped.txt; semver minor).
+
 ---
 
 ## 4. Non-functional requirements

@@ -120,7 +120,16 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
     private static byte[] DeriveNistSharedSecret(ReadOnlySpan<byte> privateKey, ReadOnlySpan<byte> publicKey, ECCurve curve)
     {
         using var localEcdh = ECDiffieHellman.Create();
-        localEcdh.ImportParameters(ImportEcPrivateKey(privateKey, curve));
+        var parameters = ImportEcPrivateKey(privateKey, curve);
+        try
+        {
+            localEcdh.ImportParameters(parameters);
+        }
+        finally
+        {
+            // The platform key object now holds the scalar; wipe our managed copy of D.
+            CryptographicOperations.ZeroMemory(parameters.D);
+        }
 
         using var remoteEcdh = ECDiffieHellman.Create();
         remoteEcdh.ImportParameters(ImportEcPublicKey(publicKey, curve));
@@ -165,7 +174,15 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
     {
         using var ecdsa = ECDsa.Create();
         var parameters = ImportEcPrivateKey(privateKey, curve);
-        ecdsa.ImportParameters(parameters);
+        try
+        {
+            ecdsa.ImportParameters(parameters);
+        }
+        finally
+        {
+            // The platform key object now holds the scalar; wipe our managed copy of D.
+            CryptographicOperations.ZeroMemory(parameters.D);
+        }
         return ecdsa.SignData(data, hashAlgorithm, format);
     }
 
@@ -216,8 +233,9 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
         // order n is not a valid private key; without this it would fail at ImportParameters time
         // with the same opaque platform CryptographicException. Normalizing it to a
         // parameter-named ArgumentException matches the BLS/secp256k1 paths (NFR-3 consistency).
-        var d = new BigInteger(privateKey, isUnsigned: true, isBigEndian: true);
-        if (d <= BigInteger.Zero || d >= EcCurveOrder(curve))
+        // Compared as fixed-length big-endian bytes rather than through BigInteger, which would
+        // put an unwipeable copy of the private scalar on the managed heap (issue #17).
+        if (!IsScalarInRange(privateKey, EcCurveOrderBytes(curve)))
             throw new ArgumentException(
                 "EC private key scalar is out of range (must satisfy 0 < D < n).", nameof(privateKey));
 
@@ -226,6 +244,25 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
             Curve = curve,
             D = privateKey.ToArray()
         };
+    }
+
+    // Constant-time 0 < d < n over same-length big-endian buffers (the length guard above
+    // guarantees d.Length == n.Length). A short-circuiting compare (SequenceCompareTo /
+    // IndexOfAnyExcept) would leak, via timing, how long a prefix of the secret scalar matches
+    // the public order; this instead runs a full-width borrow-propagating subtract d − n (a
+    // borrow left at the end ⇔ d < n) and OR-accumulates d's bytes (d ≠ 0), with no
+    // data-dependent branches or early exits.
+    private static bool IsScalarInRange(ReadOnlySpan<byte> d, ReadOnlySpan<byte> n)
+    {
+        var borrow = 0;
+        var nonZero = 0;
+        for (var i = d.Length - 1; i >= 0; i--)
+        {
+            var diff = d[i] - n[i] - borrow;
+            borrow = (diff >> 8) & 1; // arithmetic shift: 1 exactly when the byte subtraction went negative
+            nonZero |= d[i];
+        }
+        return (borrow == 1) & (nonZero != 0);
     }
 
     // NIST EC private-key scalar length (field byte length) for the supported curves.
@@ -237,23 +274,22 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
         _ => throw new ArgumentException("Unsupported curve for EC private key import.", nameof(curve))
     };
 
-    // NIST curve group orders n (verified against the published FIPS 186-4 / SEC 2 values).
-    // Each is parsed with a leading "0" nibble so NumberStyles.HexNumber yields a positive value.
-    private static readonly BigInteger P256Order = BigInteger.Parse(
-        "0FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551", NumberStyles.HexNumber);
-    private static readonly BigInteger P384Order = BigInteger.Parse(
-        "0FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF581A0DB248B0A77AECEC196ACCC52973",
-        NumberStyles.HexNumber);
-    private static readonly BigInteger P521Order = BigInteger.Parse(
-        "01FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFA51868783BF2F966B7FCC0148F709A5D03BB5C9B8899C47AEBB6FB71E91386409",
-        NumberStyles.HexNumber);
+    // NIST curve group orders n (verified against the published FIPS 186-4 / SEC 2 values),
+    // stored as fixed-length big-endian bytes matching each curve's scalar length so a candidate
+    // D can be range-checked with a span compare instead of a heap-resident BigInteger.
+    private static readonly byte[] P256OrderBytes = Convert.FromHexString(
+        "FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551");
+    private static readonly byte[] P384OrderBytes = Convert.FromHexString(
+        "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF581A0DB248B0A77AECEC196ACCC52973");
+    private static readonly byte[] P521OrderBytes = Convert.FromHexString(
+        "01FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFA51868783BF2F966B7FCC0148F709A5D03BB5C9B8899C47AEBB6FB71E91386409");
 
     // NIST EC private-key scalar upper bound (the curve order n) for the supported curves.
-    private static BigInteger EcCurveOrder(ECCurve curve) => curve.Oid?.Value switch
+    private static byte[] EcCurveOrderBytes(ECCurve curve) => curve.Oid?.Value switch
     {
-        "1.2.840.10045.3.1.7" => P256Order,
-        "1.3.132.0.34" => P384Order,
-        "1.3.132.0.35" => P521Order,
+        "1.2.840.10045.3.1.7" => P256OrderBytes,
+        "1.3.132.0.34" => P384OrderBytes,
+        "1.3.132.0.35" => P521OrderBytes,
         _ => throw new ArgumentException("Unsupported curve for EC private key import.", nameof(curve))
     };
 

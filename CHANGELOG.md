@@ -5,6 +5,50 @@ All notable changes to **NetCrypto** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Targeting **1.2.0** — deterministic zeroization of asymmetric key material (FR-18, #17).
+Additive and semver-minor: callers that never dispose keep the 1.1.x behavior exactly.
+
+### Added
+
+- **`KeyPair : IDisposable`** — `Dispose()` deterministically zeroizes the key material (via
+  `CryptographicOperations.ZeroMemory`) instead of leaving it on the heap until garbage
+  collection; afterwards any key-material access throws `ObjectDisposedException` (`KeyType`
+  stays readable) and disposal is idempotent. The canonical private-key copy now lives in a
+  **pinned** allocation, so a compacting GC cannot duplicate the secret before the wipe. (#17)
+- **`KeyPair.WithPrivateKey<T>(Func<ReadOnlySpan<byte>, T>)`** — a borrow API that lends the
+  private key as a span over the canonical pinned copy. Unlike the `PrivateKey` getter (which
+  clones the secret onto the heap on every read), borrowing creates no copy, so there is nothing
+  new to zeroize. All internal NetCrypto consumers (`InMemoryKeyStore`, `KeyPairSigner`,
+  `DeriveX25519FromEd25519`) switched to it. (#17)
+- **`InMemoryKeyStore : IDisposable`** — disposing the store zeroizes every stored key pair, and
+  further operations throw `ObjectDisposedException`. (#17)
+- **`KeyPairSigner : IDisposable`** — the signer owns the wrapped `KeyPair` by default (disposing
+  the signer destroys the key); a new `KeyPairSigner(keyPair, crypto, ownsKeyPair)` overload opts
+  out for externally managed pairs. (#17)
+
+### Changed
+
+- **`InMemoryKeyStore.DeleteAsync` now destroys the evicted key** — the removed `KeyPair` is
+  disposed (zeroized), so delete is a destruction operation, not just a directory removal. A
+  caller that imported a pair and kept using the same instance after deleting its alias will now
+  observe `ObjectDisposedException`; the store documents that it takes ownership of imported
+  pairs. (#17)
+- **Key-generation intermediates are wiped** — the Ed25519 expanded scalar and clamped X25519
+  scalar in `DeriveX25519FromEd25519` (now stack-allocated and cleared), exported NSec private
+  blobs, `ECParameters.D` after every platform key import (ECDSA sign, NIST ECDH, and generator
+  restore paths), secp256k1 scalar buffers, the BLS IKM and `ToBendian()` scalar copies, and the
+  transient private-key clone inside `JwkConverter.ToPrivateJwk` are all zeroized in `finally`
+  blocks. The EC private-scalar range check now compares fixed-length big-endian bytes instead of
+  materializing the scalar in an unwipeable `BigInteger`. (#17)
+
+### Docs
+
+- XML docs on `KeyPair`, `WithPrivateKey`, and `ToPrivateJwk` state the managed-memory
+  best-effort caveat explicitly: zeroization shrinks the exposure window (JIT spills,
+  caller-held clones, and JWK `d` strings remain outside the library's control). (#17)
+
 ## [1.1.0] - 2026-06-14
 
 Targeting **1.1.0** — additive changes from the didcomm-dotnet → NetCrypto integration (#10, #11, #12).

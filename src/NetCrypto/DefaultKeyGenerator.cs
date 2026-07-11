@@ -77,40 +77,49 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
         ArgumentNullException.ThrowIfNull(ed25519KeyPair);
         if (ed25519KeyPair.KeyType != KeyType.Ed25519)
             throw new ArgumentException("Key pair must be Ed25519.", nameof(ed25519KeyPair));
-        // Guard the length here (matching the public-only sibling below) so a wrong-sized seed
-        // raises ArgumentException rather than a raw NSec FormatException from Key.Import (NFR-3).
-        if (ed25519KeyPair.PrivateKey is not { Length: 32 })
-            throw new ArgumentException("Ed25519 private key must be 32 bytes.", nameof(ed25519KeyPair));
 
-        // Use libsodium via NSec: import the Ed25519 key and derive X25519.
-        // NSec Key.Import for Ed25519 expects the 32-byte seed.
-        var edAlgo = SignatureAlgorithm.Ed25519;
-        var xAlgo = NSec.Cryptography.KeyAgreementAlgorithm.X25519;
-
-        using var edKey = Key.Import(edAlgo, ed25519KeyPair.PrivateKey, KeyBlobFormat.RawPrivateKey,
-            new KeyCreationParameters { ExportPolicy = KeyExportPolicies.AllowPlaintextExport });
-
-        // Convert Ed25519 public key to X25519 public key using the birational map.
-        // Ed25519 private key (seed) -> clamp & scalar multiply on Curve25519 basepoint.
-        // We use the SHA-512 of the seed, clamp, and use as X25519 private key.
-        var edPrivateExpanded = SHA512.HashData(ed25519KeyPair.PrivateKey);
-        var x25519PrivateKey = edPrivateExpanded[..32];
-
-        // Clamp the scalar per X25519 spec
-        x25519PrivateKey[0] &= 248;
-        x25519PrivateKey[31] &= 127;
-        x25519PrivateKey[31] |= 64;
-
-        // Import as X25519 private key to derive the public key
-        using var xKey = Key.Import(xAlgo, x25519PrivateKey, KeyBlobFormat.RawPrivateKey,
-            new KeyCreationParameters { ExportPolicy = KeyExportPolicies.AllowPlaintextExport });
-
-        return new KeyPair
+        // Borrow the seed once (the clone-per-read PrivateKey getter would mint an unzeroed heap
+        // copy per access) and keep the expanded scalar on the stack, cleared before returning.
+        return ed25519KeyPair.WithPrivateKey(seed =>
         {
-            KeyType = KeyType.X25519,
-            PrivateKey = x25519PrivateKey,
-            PublicKey = xKey.PublicKey.Export(KeyBlobFormat.RawPublicKey)
-        };
+            // Guard the length here (matching the public-only sibling below) so a wrong-sized seed
+            // raises ArgumentException rather than a raw NSec FormatException from Key.Import (NFR-3).
+            if (seed.Length != 32)
+                throw new ArgumentException("Ed25519 private key must be 32 bytes.", nameof(ed25519KeyPair));
+
+            // Use libsodium via NSec: import the Ed25519 key and derive X25519.
+            // NSec Key.Import for Ed25519 expects the 32-byte seed.
+            var edAlgo = SignatureAlgorithm.Ed25519;
+            var xAlgo = NSec.Cryptography.KeyAgreementAlgorithm.X25519;
+
+            using var edKey = Key.Import(edAlgo, seed, KeyBlobFormat.RawPrivateKey,
+                new KeyCreationParameters { ExportPolicy = KeyExportPolicies.AllowPlaintextExport });
+
+            // Convert Ed25519 public key to X25519 public key using the birational map.
+            // Ed25519 private key (seed) -> clamp & scalar multiply on Curve25519 basepoint.
+            // We use the SHA-512 of the seed, clamp, and use as X25519 private key.
+            Span<byte> edPrivateExpanded = stackalloc byte[64];
+            try
+            {
+                SHA512.HashData(seed, edPrivateExpanded);
+                var x25519PrivateKey = edPrivateExpanded[..32];
+
+                // Clamp the scalar per X25519 spec
+                x25519PrivateKey[0] &= 248;
+                x25519PrivateKey[31] &= 127;
+                x25519PrivateKey[31] |= 64;
+
+                // Import as X25519 private key to derive the public key
+                using var xKey = Key.Import(xAlgo, x25519PrivateKey, KeyBlobFormat.RawPrivateKey,
+                    new KeyCreationParameters { ExportPolicy = KeyExportPolicies.AllowPlaintextExport });
+
+                return new KeyPair(KeyType.X25519, xKey.PublicKey.Export(KeyBlobFormat.RawPublicKey), x25519PrivateKey);
+            }
+            finally
+            {
+                edPrivateExpanded.Clear();
+            }
+        });
     }
 
     /// <inheritdoc />
@@ -189,12 +198,15 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
         using var key = Key.Create(algorithm,
             new KeyCreationParameters { ExportPolicy = KeyExportPolicies.AllowPlaintextExport });
 
-        return new KeyPair
+        var privateKey = key.Export(KeyBlobFormat.RawPrivateKey);
+        try
         {
-            KeyType = KeyType.Ed25519,
-            PrivateKey = key.Export(KeyBlobFormat.RawPrivateKey),
-            PublicKey = key.PublicKey.Export(KeyBlobFormat.RawPublicKey)
-        };
+            return new KeyPair(KeyType.Ed25519, key.PublicKey.Export(KeyBlobFormat.RawPublicKey), privateKey);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(privateKey);
+        }
     }
 
     private static KeyPair RestoreEd25519(ReadOnlySpan<byte> privateKey)
@@ -206,12 +218,7 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
         using var key = Key.Import(algorithm, privateKey, KeyBlobFormat.RawPrivateKey,
             new KeyCreationParameters { ExportPolicy = KeyExportPolicies.AllowPlaintextExport });
 
-        return new KeyPair
-        {
-            KeyType = KeyType.Ed25519,
-            PrivateKey = privateKey.ToArray(),
-            PublicKey = key.PublicKey.Export(KeyBlobFormat.RawPublicKey)
-        };
+        return new KeyPair(KeyType.Ed25519, key.PublicKey.Export(KeyBlobFormat.RawPublicKey), privateKey);
     }
 
     // --- X25519 ---
@@ -222,12 +229,15 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
         using var key = Key.Create(algorithm,
             new KeyCreationParameters { ExportPolicy = KeyExportPolicies.AllowPlaintextExport });
 
-        return new KeyPair
+        var privateKey = key.Export(KeyBlobFormat.RawPrivateKey);
+        try
         {
-            KeyType = KeyType.X25519,
-            PrivateKey = key.Export(KeyBlobFormat.RawPrivateKey),
-            PublicKey = key.PublicKey.Export(KeyBlobFormat.RawPublicKey)
-        };
+            return new KeyPair(KeyType.X25519, key.PublicKey.Export(KeyBlobFormat.RawPublicKey), privateKey);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(privateKey);
+        }
     }
 
     private static KeyPair RestoreX25519(ReadOnlySpan<byte> privateKey)
@@ -238,12 +248,7 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
         using var key = Key.Import(algorithm, privateKey, KeyBlobFormat.RawPrivateKey,
             new KeyCreationParameters { ExportPolicy = KeyExportPolicies.AllowPlaintextExport });
 
-        return new KeyPair
-        {
-            KeyType = KeyType.X25519,
-            PrivateKey = privateKey.ToArray(),
-            PublicKey = key.PublicKey.Export(KeyBlobFormat.RawPublicKey)
-        };
+        return new KeyPair(KeyType.X25519, key.PublicKey.Export(KeyBlobFormat.RawPublicKey), privateKey);
     }
 
     // --- P-256 / P-384 ---
@@ -252,26 +257,34 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
     {
         using var ecdsa = ECDsa.Create(curve);
         var parameters = ecdsa.ExportParameters(true);
-
-        // Public key as compressed SEC1 point: 0x02 (even Y) or 0x03 (odd Y) || X
-        var prefix = (parameters.Q.Y![^1] & 1) == 0 ? (byte)0x02 : (byte)0x03;
-        var publicKey = new byte[1 + parameters.Q.X!.Length];
-        publicKey[0] = prefix;
-        parameters.Q.X.CopyTo(publicKey, 1);
-
-        return new KeyPair
+        try
         {
-            KeyType = keyType,
-            PrivateKey = parameters.D!,
-            PublicKey = publicKey
-        };
+            // Public key as compressed SEC1 point: 0x02 (even Y) or 0x03 (odd Y) || X
+            var prefix = (parameters.Q.Y![^1] & 1) == 0 ? (byte)0x02 : (byte)0x03;
+            var publicKey = new byte[1 + parameters.Q.X!.Length];
+            publicKey[0] = prefix;
+            parameters.Q.X.CopyTo(publicKey, 1);
+
+            return new KeyPair(keyType, publicKey, parameters.D);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(parameters.D);
+        }
     }
 
     private static KeyPair RestoreEcDsa(ReadOnlySpan<byte> privateKey, ECCurve curve, KeyType keyType)
     {
         using var ecdsa = ECDsa.Create();
         var importParams = DefaultCryptoProvider.ImportEcPrivateKey(privateKey, curve);
-        ecdsa.ImportParameters(importParams);
+        try
+        {
+            ecdsa.ImportParameters(importParams);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(importParams.D);
+        }
 
         var parameters = ecdsa.ExportParameters(false);
 
@@ -280,12 +293,7 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
         publicKey[0] = prefix;
         parameters.Q.X.CopyTo(publicKey, 1);
 
-        return new KeyPair
-        {
-            KeyType = keyType,
-            PrivateKey = privateKey.ToArray(),
-            PublicKey = publicKey
-        };
+        return new KeyPair(keyType, publicKey, privateKey);
     }
 
     // --- secp256k1 ---
@@ -294,28 +302,30 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
     {
         ECPrivKey? privKey = null;
         Span<byte> keyBytes = stackalloc byte[32];
-
-        while (privKey is null)
+        Span<byte> privateKeyBytes = stackalloc byte[32];
+        try
         {
-            RandomNumberGenerator.Fill(keyBytes);
-            ECPrivKey.TryCreate(keyBytes, out privKey);
+            while (privKey is null)
+            {
+                RandomNumberGenerator.Fill(keyBytes);
+                ECPrivKey.TryCreate(keyBytes, out privKey);
+            }
+
+            var pubKey = privKey.CreatePubKey();
+
+            // Store compressed public key (33 bytes)
+            var publicKeyBytes = new byte[33];
+            pubKey.WriteToSpan(compressed: true, publicKeyBytes, out _);
+
+            privKey.WriteToSpan(privateKeyBytes);
+
+            return new KeyPair(KeyType.Secp256k1, publicKeyBytes, privateKeyBytes);
         }
-
-        var pubKey = privKey.CreatePubKey();
-
-        // Store compressed public key (33 bytes)
-        var publicKeyBytes = new byte[33];
-        pubKey.WriteToSpan(compressed: true, publicKeyBytes, out _);
-
-        var privateKeyBytes = new byte[32];
-        privKey.WriteToSpan(privateKeyBytes);
-
-        return new KeyPair
+        finally
         {
-            KeyType = KeyType.Secp256k1,
-            PrivateKey = privateKeyBytes,
-            PublicKey = publicKeyBytes
-        };
+            keyBytes.Clear();
+            privateKeyBytes.Clear();
+        }
     }
 
     private static KeyPair RestoreSecp256k1(ReadOnlySpan<byte> privateKey)
@@ -331,12 +341,7 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
         var publicKeyBytes = new byte[33];
         pubKey.WriteToSpan(compressed: true, publicKeyBytes, out _);
 
-        return new KeyPair
-        {
-            KeyType = KeyType.Secp256k1,
-            PrivateKey = privateKey.ToArray(),
-            PublicKey = publicKeyBytes
-        };
+        return new KeyPair(KeyType.Secp256k1, publicKeyBytes, privateKey);
     }
 
     // --- BLS12-381 ---
@@ -349,6 +354,7 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
 
         var sk = new Bls.SecretKey();
         sk.Keygen(ikm);
+        ikm.Clear(); // the IKM is seed material — wipe it as soon as keygen has consumed it
 
         return BuildBlsKeyPair(keyType, sk);
     }
@@ -374,29 +380,34 @@ public sealed class DefaultKeyGenerator : IKeyGenerator
 
     private static KeyPair BuildBlsKeyPair(KeyType keyType, Bls.SecretKey sk)
     {
-        byte[] publicKey;
-        if (keyType == KeyType.Bls12381G1)
+        // Extract the scalar once and wipe it after the KeyPair has copied it into its pinned
+        // store (the G2 path previously minted a second, orphaned ToBendian() copy).
+        var scalarBytes = sk.ToBendian();
+        try
         {
-            // G1 public key: 48 bytes compressed
-            var pk = new Bls.P1();
-            pk.FromSk(sk);
-            publicKey = pk.Compress();
-        }
-        else
-        {
-            // G2 public key: 96 bytes compressed
-            // P2 doesn't have FromSk — use scalar multiplication on the generator
-            var scalar = new Bls.Scalar();
-            scalar.FromBendian(sk.ToBendian());
-            var pk = Bls.P2.Generator().Mult(scalar);
-            publicKey = pk.Compress();
-        }
+            byte[] publicKey;
+            if (keyType == KeyType.Bls12381G1)
+            {
+                // G1 public key: 48 bytes compressed
+                var pk = new Bls.P1();
+                pk.FromSk(sk);
+                publicKey = pk.Compress();
+            }
+            else
+            {
+                // G2 public key: 96 bytes compressed
+                // P2 doesn't have FromSk — use scalar multiplication on the generator
+                var scalar = new Bls.Scalar();
+                scalar.FromBendian(scalarBytes);
+                var pk = Bls.P2.Generator().Mult(scalar);
+                publicKey = pk.Compress();
+            }
 
-        return new KeyPair
+            return new KeyPair(keyType, publicKey, scalarBytes);
+        }
+        finally
         {
-            KeyType = keyType,
-            PrivateKey = sk.ToBendian(),
-            PublicKey = publicKey
-        };
+            CryptographicOperations.ZeroMemory(scalarBytes);
+        }
     }
 }
