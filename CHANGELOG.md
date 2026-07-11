@@ -5,10 +5,7 @@ All notable changes to **NetCrypto** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-Targeting **1.2.0** — deterministic zeroization of asymmetric key material (FR-18, #17).
-Additive and semver-minor: callers that never dispose keep the 1.1.x behavior exactly.
+## [1.2.0] - 2026-07-10
 
 ### Added
 
