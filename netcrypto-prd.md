@@ -394,6 +394,40 @@ clones, and strings (JWK `d`) are outside the library's control; the XML docs of
   dispose (all 8 key types).
 - [ ] Public surface changes are additive only (PublicAPI.Unshipped.txt; semver minor).
 
+### FR-19 — Public EC point decompression (1.3.0, issue #19)
+
+`net-did`'s did:ethr resolver derives an Ethereum address (`keccak256(X ‖ Y)[-20:]`) from a
+**bare 33-byte compressed secp256k1 public key** — no signature exists at that site, so
+`Secp256k1Recoverable.RecoverPublicKey` is not a substitute. The decompression logic already
+exists internally (`DefaultCryptoProvider.DecompressEcPoint` / the NBitcoin secp256k1 path) but
+had no public entry point, forcing the consumer into a direct `NBitcoin.Secp256k1` call.
+
+`public static byte[] ToUncompressed(this KeyType keyType, byte[] publicKey)` on
+`KeyTypeExtensions` — the inverse of `NormalizeToCompressed`:
+
+- Compressed SEC1 input (0x02/0x03 prefix; 33/49/67 bytes) → uncompressed `0x04 ‖ X ‖ Y`
+  (65/97/133 bytes) for secp256k1, P-256, P-384, and P-521.
+- Uncompressed input of the correct length is a **validated** pass-through returned as a
+  defensive copy (mirrors `NormalizeToCompressed`'s tolerant input handling, but an off-curve
+  point never passes through unchecked — invalid-curve-attack defense as in NFR-3/`EcPointValidator`).
+- Key types without a SEC1 point encoding throw `ArgumentException(nameof(keyType))`.
+
+**Acceptance criteria:**
+- [ ] For each of the four EC key types: `ToUncompressed(Generate(t).PublicKey)` yields
+  `0x04`-prefixed output of 1 + 2·coordLen bytes, and `NormalizeToCompressed` of that output
+  round-trips to the original compressed key.
+- [ ] secp256k1 decompression reproduces the SEC 2 base-point vector (`02‖Gx` → `04‖Gx‖Gy`), and
+  equals `RecoverPublicKey(digest, sig, recid, compressed: false)` for the same key.
+- [ ] NIST decompression matches BCL `ECDsa` explicit (X, Y) export for P-256/P-384/P-521.
+- [ ] NFR-3 negatives: null → `ArgumentNullException(publicKey)`; non-EC key type →
+  `ArgumentException(keyType)`; wrong length/prefix, compressed X with no curve solution,
+  off-curve uncompressed point, and the identity encoding → `ArgumentException(publicKey)` —
+  never a leaked `CryptographicException` or backend exception.
+- [ ] No NBitcoin type in the public signature (NFR-1); declared in `PublicAPI.Unshipped.txt`
+  (additive; semver minor → 1.3.0).
+- [ ] The `Keys` sample demonstrates the API (FR-17 coverage check), including the
+  Ethereum-address derivation from a bare compressed key.
+
 ---
 
 ## 4. Non-functional requirements

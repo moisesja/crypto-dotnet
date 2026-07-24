@@ -107,7 +107,7 @@ Console.WriteLine();
 // -------------------------------------------------------
 // 5. KeyTypeExtensions — validation and normalization helpers
 // -------------------------------------------------------
-Console.WriteLine("=== 5. KeyTypeExtensions — NormalizeToCompressed / IsValidEcPoint ===");
+Console.WriteLine("=== 5. KeyTypeExtensions — NormalizeToCompressed / ToUncompressed / IsValidEcPoint ===");
 
 // Other stacks (BCL ECDsa, HSMs, JOSE) often hand you *uncompressed* SEC1
 // points (0x04 || X || Y, 65 bytes for P-256). NetCrypto stores compressed
@@ -129,6 +129,20 @@ Check(!KeyType.P256.IsValidKeyLength(uncompressed.Length) && KeyType.P256.IsVali
 // proof that NormalizeToCompressed and the generator agree on the format.
 var p256Restored = keyGenerator.FromPrivateKey(KeyType.P256, ec.D!);
 Check(p256Restored.PublicKey.AsSpan().SequenceEqual(compressed), "FromPrivateKey matches the normalized point");
+
+// The inverse direction — ToUncompressed — recovers the full 0x04 || X || Y
+// point from a stored compressed key. Some ecosystems need the explicit
+// coordinates: an Ethereum address, for example, is keccak256(X || Y)[12..],
+// derived here from a bare compressed secp256k1 key (no signature involved).
+var ethKey = keyGenerator.Generate(KeyType.Secp256k1);
+var ethUncompressed = KeyType.Secp256k1.ToUncompressed(ethKey.PublicKey);
+var ethAddress = Keccak256.Hash(ethUncompressed.AsSpan(1))[12..];
+Console.WriteLine($"  Compressed {ethKey.PublicKey.Length} B -> uncompressed {ethUncompressed.Length} B " +
+                  $"(prefix 0x{ethUncompressed[0]:X2}) -> address 0x{Convert.ToHexString(ethAddress).ToLowerInvariant()}");
+// Decompression is validated and exactly inverts NormalizeToCompressed.
+Check(KeyType.Secp256k1.NormalizeToCompressed(ethUncompressed).AsSpan().SequenceEqual(ethKey.PublicKey),
+    "ToUncompressed round-trips back to the stored compressed point");
+Check(ethAddress.Length == 20, "Ethereum address is the last 20 bytes of keccak256(X || Y)");
 
 // IsValidEcPoint defends against the invalid-curve attack: always check
 // foreign EC keys before using them, or a malicious off-curve point can
