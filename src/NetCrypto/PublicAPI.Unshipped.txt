@@ -18,3 +18,4 @@ NetCrypto.KeyPair.Dispose() -> void
 NetCrypto.KeyPair.WithPrivateKey<T>(System.Func<System.ReadOnlySpan<byte>, T>! use) -> T
 NetCrypto.KeyPairSigner.Dispose() -> void
 NetCrypto.KeyPairSigner.KeyPairSigner(NetCrypto.KeyPair! keyPair, NetCrypto.ICryptoProvider! crypto, bool ownsKeyPair) -> void
+static NetCrypto.KeyTypeExtensions.ToUncompressed(this NetCrypto.KeyType keyType, byte[]! publicKey) -> byte[]!

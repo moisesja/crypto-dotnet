@@ -5,6 +5,20 @@ All notable changes to **NetCrypto** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-07-24
+
+### Added
+
+- **`KeyTypeExtensions.ToUncompressed(this KeyType, byte[])`** — public, validated EC point
+  decompression (33/49/67-byte compressed SEC1 → 65/97/133-byte `0x04‖X‖Y`), the inverse of
+  `NormalizeToCompressed`, for secp256k1, P-256, P-384, and P-521. Already-uncompressed input is
+  accepted as a validated pass-through (returned as a defensive copy); an off-curve point never
+  passes through unchecked. Null → `ArgumentNullException`; everything else invalid (wrong
+  length/prefix, X with no curve solution, off-curve point, identity encoding, non-EC key type)
+  → parameter-named `ArgumentException`. Unblocks net-did's did:ethr resolver, which derives
+  Ethereum addresses (`keccak256(X‖Y)[-20:]`) from bare compressed secp256k1 keys and previously
+  had to call `NBitcoin.Secp256k1` directly for this one operation. (#19)
+
 ## [1.2.0] - 2026-07-10
 
 ### Added
