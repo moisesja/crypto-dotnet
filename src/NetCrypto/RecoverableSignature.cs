@@ -7,10 +7,22 @@ namespace NetCrypto;
 /// <see cref="Secp256k1Recoverable.Sign"/>.
 /// </summary>
 /// <remarks>
+/// <para>
 /// <b>Boundary (PRD FR-12 ruling):</b> the recovery id is the <i>raw</i> id in
 /// <c>{0, 1, 2, 3}</c>. EVM <c>v</c>-encoding — legacy <c>27 + recid</c> or EIP-155
 /// <c>35 + recid + 2·chainId</c> — is the wallet layer's responsibility and is
 /// deliberately absent from this library.
+/// </para>
+/// <para>
+/// <b>Equality is reference-based on <see cref="Signature64"/>.</b> Because the compiler-generated
+/// <c>Equals</c>/<c>==</c>/<c>GetHashCode</c> compare the <c>byte[]</c> by reference (not by
+/// content), two structurally-identical signatures — including the byte-identical outputs RFC 6979
+/// determinism produces for the same key and digest — are <i>not</i> equal and hash differently.
+/// This matches the raw-tuple return of <see cref="Secp256k1Recoverable.Sign"/>. Callers that need
+/// value comparison (deduplication, replay caches) must compare <see cref="Signature64"/> with
+/// <see cref="System.MemoryExtensions.SequenceEqual{T}(System.ReadOnlySpan{T}, System.ReadOnlySpan{T})"/>
+/// (and <see cref="RecoveryId"/>), or key on an encoded form of the bytes.
+/// </para>
 /// </remarks>
 /// <param name="Signature64">The 64-byte compact signature (<c>R‖S</c>, each 32 bytes
 /// big-endian), low-S normalized (<c>S ≤ n/2</c>).</param>

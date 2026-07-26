@@ -258,7 +258,18 @@ that may never leave its store.
   `IKeyStore.CreateSignerAsync` pattern-matches to `IRecoverableDigestSigner`).
   `IKeyStore.SignDigestAsync(alias, digest32, ct)` ships as a **default interface
   implementation throwing `NotSupportedException`**, so external store implementations stay
-  source- and binary-compatible and opt in explicitly; `InMemoryKeyStore` implements it.
+  source- and binary-compatible and opt in explicitly; `InMemoryKeyStore` implements it. The
+  default implementation still validates `digest32` length first, so the parameter-named
+  `ArgumentException` contract below holds even for stores that rely on it.
+- **Boundary verification (external-store defense).** Because the backing `IKeyStore` may be an
+  arbitrary provider (HSM, cloud KMS), `KeyStoreSigner.SignDigestAsync` verifies the store's
+  returned signature before handing it back: it must be structurally valid (64-byte `R‖S`,
+  recovery id 0–3) **and** must recover to the signer's advertised `PublicKey`, else
+  `CryptographicException`. This prevents a malformed provider result from propagating through the
+  non-nullable API and prevents alias rebinding (delete + recreate under the same alias) from
+  letting a signer emit a signature that recovers to a different key than it advertises.
+- `RecoverableSignature` equality is reference-based on `Signature64` (documented; consistent with
+  the `Secp256k1Recoverable.Sign` tuple) — value comparison is the caller's responsibility.
 - **Boundary:** FR-12's ruling is inherited verbatim — the raw recovery id only. Keccak-256
   digest computation and EVM `v`-encoding (`27 + recid`, EIP-155 `35 + recid + 2·chainId`)
   stay in the wallet layer and must NOT appear in NetCrypto.
@@ -284,6 +295,13 @@ that may never leave its store.
   alias → `KeyNotFoundException`; non-secp256k1 alias → `NotSupportedException`.
 - [ ] A store implementation compiled against the pre-1.4.0 `IKeyStore` shape (no
   `SignDigestAsync` override) still compiles — the DIM source-compatibility proof.
+- [ ] Boundary verification: alias rebinding (delete + recreate under the same alias) and an
+  advertised-key mismatch each make `KeyStoreSigner.SignDigestAsync` throw `CryptographicException`
+  rather than return a signature that recovers to the wrong key; a store returning a structurally
+  invalid signature (wrong length / out-of-range recid) is rejected the same way; a well-behaved
+  store's valid output still round-trips.
+- [ ] The `IKeyStore.SignDigestAsync` DIM default throws parameter-named `ArgumentException("digest32")`
+  on a wrong-length digest (0/31/33 bytes), before the `NotSupportedException` unsupported signal.
 
 ### FR-13 — AES-256-GCM (A256GCM)
 

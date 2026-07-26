@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Numerics;
+using System.Security.Cryptography;
 using FluentAssertions;
 using NetCrypto;
 
@@ -303,6 +304,90 @@ public class RecoverableDigestSignerTests
             .Should().Equal(signer.PublicKey.ToArray());
     }
 
+    // --- Review #22 regression: KeyStoreSigner verifies the store's output at the boundary ---
+
+    // Formal-review claim 1: alias rebinding (delete + recreate under the same alias) must not let
+    // an old signer silently return a signature for the NEW key while advertising the OLD one.
+    [Fact]
+    public async Task KeyStoreSigner_SignDigestAsync_AliasReboundToDifferentKey_ThrowsCryptographic()
+    {
+        using var store = NewStore();
+        await store.GenerateAsync("evm", KeyType.Secp256k1);
+        var signer = (IRecoverableDigestSigner)await store.CreateSignerAsync("evm"); // captures K1's public key
+
+        await store.DeleteAsync("evm");
+        await store.GenerateAsync("evm", KeyType.Secp256k1); // same alias, a fresh K2
+
+        var digest = new byte[32];
+        new Random(3).NextBytes(digest);
+
+        // The old signer must refuse: the store now signs with K2, which does not recover to the
+        // K1 identity the signer advertises.
+        await FluentActions.Awaiting(() => signer.SignDigestAsync(digest))
+            .Should().ThrowAsync<CryptographicException>();
+    }
+
+    // Same integrity guard, provoked directly: a signer whose advertised public key does not match
+    // the alias's actual key must not return a signature that recovers to the wrong identity.
+    [Fact]
+    public async Task KeyStoreSigner_SignDigestAsync_AdvertisedKeyMismatch_ThrowsCryptographic()
+    {
+        using var store = NewStore();
+        await store.GenerateAsync("real", KeyType.Secp256k1);
+        var otherPublicKey = _keyGen.Generate(KeyType.Secp256k1).PublicKey; // a different key
+
+        var signer = new KeyStoreSigner(store, "real", KeyType.Secp256k1, otherPublicKey);
+
+        await FluentActions.Awaiting(() => signer.SignDigestAsync(new byte[32]))
+            .Should().ThrowAsync<CryptographicException>();
+    }
+
+    // Formal-review claim 2: a store returning a structurally invalid RecoverableSignature must not
+    // pass through KeyStoreSigner unchanged (the external HSM/provider boundary needs validation).
+    [Fact]
+    public async Task KeyStoreSigner_SignDigestAsync_MalformedStoreOutput_ThrowsCryptographic()
+    {
+        var realPublicKey = _keyGen.Generate(KeyType.Secp256k1).PublicKey;
+        var signer = new KeyStoreSigner(new MalformedOutputStore(), "alias", KeyType.Secp256k1, realPublicKey);
+
+        // MalformedOutputStore returns Signature64 of length 1 with RecoveryId 27 — neither the
+        // documented 64-byte R‖S nor a raw 0–3 recovery id.
+        await FluentActions.Awaiting(() => signer.SignDigestAsync(new byte[32]))
+            .Should().ThrowAsync<CryptographicException>();
+    }
+
+    // A well-behaved store's valid output still round-trips through the new verification.
+    [Fact]
+    public async Task KeyStoreSigner_SignDigestAsync_ValidStoreOutput_StillSucceeds()
+    {
+        using var store = NewStore();
+        var info = await store.GenerateAsync("evm", KeyType.Secp256k1);
+        var signer = (IRecoverableDigestSigner)await store.CreateSignerAsync("evm");
+
+        var digest = new byte[32];
+        new Random(21).NextBytes(digest);
+        var result = await signer.SignDigestAsync(digest);
+
+        Secp256k1Recoverable.RecoverPublicKey(digest, result.Signature64, result.RecoveryId, compressed: true)
+            .Should().Equal(info.PublicKey);
+    }
+
+    // Formal-review claim 3: the IKeyStore DIM default must honor the "every entry point" input
+    // contract — a bad digest length throws a parameter-named ArgumentException, not the generic
+    // NotSupportedException, before the unsupported signal.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(31)]
+    [InlineData(33)]
+    public async Task IKeyStore_SignDigestAsync_DefaultImplementation_WrongDigestLength_ThrowsArgumentException(int length)
+    {
+        IKeyStore store = new DimDefaultKeyStore();
+
+        var act = () => store.SignDigestAsync("any", new byte[length]);
+
+        (await act.Should().ThrowAsync<ArgumentException>()).WithParameterName("digest32");
+    }
+
     /// <summary>Converts a non-negative BigInteger to exactly 32 big-endian bytes.</summary>
     private static byte[] ToBigEndian32(BigInteger value)
     {
@@ -320,6 +405,42 @@ public class RecoverableDigestSignerTests
     /// </summary>
     private sealed class DimDefaultKeyStore : IKeyStore
     {
+        public Task<StoredKeyInfo> GenerateAsync(string alias, KeyType keyType, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<StoredKeyInfo> ImportAsync(string alias, KeyPair keyPair, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<StoredKeyInfo?> GetInfoAsync(string alias, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<byte[]> SignAsync(string alias, ReadOnlyMemory<byte> data, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<ISigner> CreateSignerAsync(string alias, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<byte[]> DeriveSharedSecretAsync(string alias, ReadOnlyMemory<byte> peerPublicKey, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<IReadOnlyList<string>> ListAsync(CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<bool> DeleteAsync(string alias, CancellationToken ct = default)
+            => throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// A hostile/buggy store standing in for an external HSM or KMS provider: it returns a
+    /// structurally invalid <see cref="RecoverableSignature"/> (1-byte signature, out-of-range
+    /// recovery id) that <see cref="KeyStoreSigner"/> must reject at the boundary rather than
+    /// propagate through its non-nullable, contractually-64-byte API.
+    /// </summary>
+    private sealed class MalformedOutputStore : IKeyStore
+    {
+        public Task<RecoverableSignature> SignDigestAsync(string alias, ReadOnlyMemory<byte> digest32, CancellationToken ct = default)
+            => Task.FromResult(new RecoverableSignature([0x01], 27));
+
         public Task<StoredKeyInfo> GenerateAsync(string alias, KeyType keyType, CancellationToken ct = default)
             => throw new NotImplementedException();
 

@@ -169,3 +169,54 @@ then run autonomously to the end.
 publish/release/deploy: write `tasks/todo{timestamp}.md`, then STOP and present the plan for
 approval before the first implementation edit. Only skip the check-in when the user has
 approved the plan itself, not merely the goal.
+
+## L8 — A direct PR-review command authorizes execution; do not turn it into a plan gate
+
+**Context:** The user explicitly asked to inspect a newly opened pull request and post either
+specific concerns or an approval. I created the required task plan, but then stopped and asked
+the user to approve that plan. The user corrected this: the request was already an instruction
+to perform the review and publish the result, not an invitation to negotiate the workflow.
+
+**Rule:** For a read-and-review task whose requested outcome is an ordinary PR review comment,
+write and maintain the repository's task plan without introducing an extra approval gate. The
+plan checkpoint is for implementation/release decisions where the plan materially affects what
+will be built or published; it must not block routine execution the user already authorized.
+
+**How to apply:** When the user says to review a PR and post the result, identify the PR, inspect
+it, and submit the review in the same run. Only stop for clarification when the repository or PR
+cannot be resolved safely, or when the requested external action is genuinely ambiguous.
+
+## L8 — Adversarial coverage for a delegation/boundary type must probe state-mutation-under-a-live-handle and full backend-output passthrough, not just input guards
+
+**Context:** For issue #21 I ran an adversarial pass that reported "57 exploit tests, zero
+findings" and declared the code sound. Two human reviews and a second, deeper adversarial pass
+then found three real defects the first pass missed, all on the `KeyStoreSigner`/`IKeyStore`
+seam: (1) **alias rebinding** — delete an alias, recreate it with a new key, and an old signer
+still signs with the new key while advertising the old public key (identity confusion); (2) a
+**malformed store output** (`RecoverableSignature([0x01], 27)`) passed straight through the
+non-nullable, contractually-64-byte API; (3) the **DIM default** threw `NotSupportedException`
+instead of the documented parameter-named `ArgumentException("digest32")` on a bad digest length.
+The first pass had tested input guards exhaustively (lengths, null, wrong key type, disposed) and
+even a bogus store — but only to confirm the *length guard fires first*, never the
+*valid-digest passthrough* of garbage; and it tested import-under-two-aliases but never
+delete-then-recreate.
+
+**Rule:** For a type that DELEGATES to mutable external state (a store, an HSM, a provider) behind
+a handle that caches metadata (here `KeyStoreSigner` caches `PublicKey`/`KeyType` at
+construction), the adversarial pass must cover three families the input-guard sweep does not:
+(a) **state mutation under a live handle** — rebind/delete/recreate the delegated-to entity, then
+use the stale handle, and check the handle's advertised identity still matches what it produces;
+(b) **hostile/buggy backend output** — a backend that returns structurally-valid-looking but
+wrong or malformed results for a *valid* input, verifying the wrapper validates OUTPUT
+symmetrically to how it validates INPUT (L6's seam, on the return path); (c) **advertised-vs-produced
+consistency** — for any type that both advertises an identity and produces identity-bearing output
+(a recoverable signature literally encodes its signer), assert the two agree before returning.
+"Zero findings" from a pass that only fed bad inputs certifies input handling, not boundary
+integrity. See [[L6]], [[L4]].
+
+**How to apply:** When the change wraps or delegates across a trust boundary, add to the
+adversarial brief an explicit checklist: mutate the backing state mid-life (delete/recreate/rebind)
+and reuse the handle; return malformed AND wrong-but-valid output from a test-double backend for a
+good input; and assert `recover(output) == advertised identity`. Only after those run may the pass
+claim the seam is sound. The fix pattern for (a)+(c) here was a recover-and-compare guard at the
+wrapper boundary; for (b), structural validation of the backend's result before returning it.

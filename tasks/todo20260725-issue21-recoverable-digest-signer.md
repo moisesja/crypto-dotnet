@@ -53,3 +53,37 @@ check-in; present the plan before the first edit, especially for release tasks.
 
 **Release:** paused before merge per user's choice; PR opened, awaiting CI + user review before
 merge → tag `v1.4.0` → release CI (NuGet publish).
+
+## Review round 2 (PR #22 feedback — two review sets)
+
+Two reviews landed: an LGTM comment (minor notes) and a formal COMMENTED review ("would not merge
+as written") with three reproduced failures. I reproduced all three against the committed code,
+confirmed valid, and fixed:
+
+1. **Alias rebinding silently changed signer identity** (delete + recreate alias → old signer
+   emits a signature that recovers to the NEW key while advertising the OLD one). VALID.
+2. **Malformed store output passed through** `KeyStoreSigner` unchanged (`RecoverableSignature([0x01], 27)`
+   accepted). VALID.
+3. **DIM default violated the "every entry point" contract** — 31-byte digest → `NotSupportedException`
+   instead of parameter-named `ArgumentException("digest32")`. VALID.
+
+**Fixes:**
+- `KeyStoreSigner.SignDigestAsync` now verifies the store's output at the boundary: structural
+  check (64-byte `R‖S`, recid 0–3) + recover-and-compare against the advertised `PublicKey` →
+  `CryptographicException` on mismatch. Closes (1) and (2) together.
+- `IKeyStore.SignDigestAsync` DIM default validates digest length before throwing `NotSupported`.
+  Closes (3).
+- `RecoverableSignature` reference-equality documented (LGTM note 1a); CHANGELOG date → 2026-07-26
+  (note 1c). Note 1b (KeyStoreSigner defers secp256k1 check to store) — reviewer said correct as
+  written; no change.
+
+**Regression tests (+7, suite now 943):** alias-rebind → `CryptographicException`; advertised-key
+mismatch → `CryptographicException`; malformed store output → `CryptographicException`; valid
+store output still round-trips; DIM default wrong-length (0/31/33) → `ArgumentException("digest32")`.
+
+**Public API unchanged** (behavioral fix only — private helper + DIM body). Full solution build
+`-warnaserror` clean, 943 tests, all samples, ApiCoverageCheck green.
+
+**Lesson L8:** adversarial coverage for a delegation/boundary type must probe state-mutation-under-
+a-live-handle and full backend-output passthrough, not just input guards — the first pass's "zero
+findings" certified input handling, not boundary integrity.

@@ -65,8 +65,15 @@ public interface IKeyStore
     /// <exception cref="NotSupportedException">The store does not support recoverable digest
     /// signing, or the stored key is not secp256k1.</exception>
     Task<RecoverableSignature> SignDigestAsync(string alias, ReadOnlyMemory<byte> digest32, CancellationToken ct = default)
-        => throw new NotSupportedException(
+    {
+        // Validate the caller's argument before reporting the operation unsupported, so a malformed
+        // digest surfaces as the same parameter-named ArgumentException the contract promises at
+        // every entry point (an overriding store validates the same way).
+        if (digest32.Length != 32)
+            throw new ArgumentException($"Digest must be 32 bytes, got {digest32.Length}.", nameof(digest32));
+        throw new NotSupportedException(
             "This key store does not support recoverable digest signing. Override SignDigestAsync to enable EVM flows.");
+    }
 
     /// <summary>List all stored key aliases.</summary>
     Task<IReadOnlyList<string>> ListAsync(CancellationToken ct = default);

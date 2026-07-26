@@ -5,7 +5,7 @@ All notable changes to **NetCrypto** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.4.0] - 2026-07-25
+## [1.4.0] - 2026-07-26
 
 ### Added
 
@@ -32,6 +32,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `KeyNotFoundException` and disposed signer/store throws `ObjectDisposedException`, matching
   the existing `SignAsync` semantics. The digest content is opaque — no semantic validation
   (an all-zero digest is a valid ECDSA input). (#21)
+
+### Security
+
+- **`KeyStoreSigner.SignDigestAsync` verifies the store's output at the boundary.** Because the
+  backing `IKeyStore` may be an arbitrary external provider (HSM, cloud KMS), the returned
+  signature is now checked before being handed back: it must be a structurally valid recoverable
+  signature (64-byte `R‖S`, recovery id 0–3) **and** must recover to the signer's advertised
+  `PublicKey`, otherwise a `CryptographicException` is thrown. This closes two review findings — a
+  malformed provider result silently passing through the non-nullable API, and alias rebinding
+  (delete + recreate a key under the same alias) letting an old signer emit a signature that
+  recovers to a *different* key than it advertises. (#21)
+- **The `IKeyStore.SignDigestAsync` default implementation now validates the digest length** (bad
+  length → parameter-named `ArgumentException("digest32")`) before signalling `NotSupportedException`,
+  so the "parameter-named `ArgumentException` at every entry point" contract holds for stores that
+  rely on the default. (#21)
+- **`RecoverableSignature` equality is documented as reference-based** on `Signature64` (matching the
+  raw-tuple return of `Secp256k1Recoverable.Sign`): RFC 6979 determinism makes two signings of the
+  same key+digest byte-identical, but the values are not `Equals`/`==`-equal, so callers building
+  deduplication or replay caches must compare `Signature64` by content. (#21)
 
 ## [1.3.0] - 2026-07-24
 
