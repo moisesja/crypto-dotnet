@@ -6,7 +6,7 @@ namespace NetCrypto;
 /// Wraps a key store alias for HSM/vault-backed signing (secure path).
 /// The private key never leaves the store.
 /// </summary>
-public sealed class KeyStoreSigner : ISigner
+public sealed class KeyStoreSigner : ISigner, IRecoverableDigestSigner
 {
     private readonly IKeyStore _store;
     private readonly string _alias;
@@ -33,4 +33,16 @@ public sealed class KeyStoreSigner : ISigner
     /// <inheritdoc />
     public Task<byte[]> SignAsync(ReadOnlyMemory<byte> data, CancellationToken ct = default)
         => _store.SignAsync(_alias, data, ct);
+
+    /// <inheritdoc />
+    /// <exception cref="KeyNotFoundException">The store no longer holds a key under this signer's alias.</exception>
+    public Task<RecoverableSignature> SignDigestAsync(ReadOnlyMemory<byte> digest32, CancellationToken ct = default)
+    {
+        // Validated here as well as in the store so every IRecoverableDigestSigner front door
+        // enforces the same parameter-named contract, even over a store that forgets to.
+        if (digest32.Length != 32)
+            throw new ArgumentException($"Digest must be 32 bytes, got {digest32.Length}.", nameof(digest32));
+
+        return _store.SignDigestAsync(_alias, digest32, ct);
+    }
 }

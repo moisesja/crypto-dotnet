@@ -101,6 +101,27 @@ public sealed class InMemoryKeyStore : IKeyStore, IDisposable
     }
 
     /// <inheritdoc />
+    public Task<RecoverableSignature> SignDigestAsync(string alias, ReadOnlyMemory<byte> digest32, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(alias);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (digest32.Length != 32)
+            throw new ArgumentException($"Digest must be 32 bytes, got {digest32.Length}.", nameof(digest32));
+
+        if (!_keys.TryGetValue(alias, out var entry))
+            throw new KeyNotFoundException($"Key alias '{alias}' not found.");
+        if (entry.KeyPair.KeyType != KeyType.Secp256k1)
+            throw new NotSupportedException(
+                $"Recoverable digest signing requires a secp256k1 key; alias '{alias}' holds {entry.KeyPair.KeyType}.");
+
+        // Borrow instead of reading KeyPair.PrivateKey: the clone-per-read getter would leave one
+        // unzeroed private-key copy on the heap per signature.
+        var (signature, recoveryId) = entry.KeyPair.WithPrivateKey(
+            privateKey => Secp256k1Recoverable.Sign(privateKey, digest32.Span));
+        return Task.FromResult(new RecoverableSignature(signature, recoveryId));
+    }
+
+    /// <inheritdoc />
     public Task<ISigner> CreateSignerAsync(string alias, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(alias);

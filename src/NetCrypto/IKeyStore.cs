@@ -42,6 +42,32 @@ public interface IKeyStore
     /// <exception cref="ArgumentException">The stored key's type is not ECDH-capable, or <paramref name="peerPublicKey"/> is malformed for the curve.</exception>
     Task<byte[]> DeriveSharedSecretAsync(string alias, ReadOnlyMemory<byte> peerPublicKey, CancellationToken ct = default);
 
+    /// <summary>
+    /// Signs a caller-supplied 32-byte digest with a stored secp256k1 key, producing a
+    /// recoverable ECDSA signature (compact <c>R‖S</c> plus the raw recovery id). The digest is
+    /// signed as-is — no hashing is applied — and the private key never leaves the store; this is
+    /// the recoverable counterpart to <see cref="SignAsync"/>, enabling EVM flows (did:ethr,
+    /// EIP-155 transactions) against HSM/vault-held keys. Per the PRD FR-12 boundary, no EVM
+    /// <c>v</c>-encoding is applied — the raw recovery id (0–3) is returned.
+    /// </summary>
+    /// <remarks>
+    /// The default implementation throws <see cref="NotSupportedException"/>, so existing store
+    /// implementations stay source- and binary-compatible; stores opt in by overriding it.
+    /// </remarks>
+    /// <param name="alias">Alias of the stored key. Must be a secp256k1 key.</param>
+    /// <param name="digest32">The 32-byte digest to sign (e.g. a Keccak-256 hash computed by the
+    /// caller). Content is opaque — only the length is validated.</param>
+    /// <param name="ct">A token to cancel the operation.</param>
+    /// <returns>The compact signature and raw recovery id, deterministic (RFC 6979) and low-S
+    /// normalized, matching <see cref="Secp256k1Recoverable.Sign"/>.</returns>
+    /// <exception cref="KeyNotFoundException">No key is stored under <paramref name="alias"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="digest32"/> is not 32 bytes.</exception>
+    /// <exception cref="NotSupportedException">The store does not support recoverable digest
+    /// signing, or the stored key is not secp256k1.</exception>
+    Task<RecoverableSignature> SignDigestAsync(string alias, ReadOnlyMemory<byte> digest32, CancellationToken ct = default)
+        => throw new NotSupportedException(
+            "This key store does not support recoverable digest signing. Override SignDigestAsync to enable EVM flows.");
+
     /// <summary>List all stored key aliases.</summary>
     Task<IReadOnlyList<string>> ListAsync(CancellationToken ct = default);
 

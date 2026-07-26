@@ -150,3 +150,22 @@ exception TYPE on malformed/wrong-length input (must be parameter-named `Argumen
 leaked backend/platform exception), and input CANONICALIZATION (does the codec accept multiple textual
 forms for the same bytes?). If you catch yourself writing "it's just a thin X so I'll skip the
 adversarial pass," that sentence is the trigger to run it, not skip it. See [[L4]], [[L5]].
+
+## L7 — "Go" authorizes the goal, not skipping the plan-approval checkpoint
+
+**Context:** For issue #21 ("deploy this single issue as version 1.4.0 … Go") I wrote the plan
+file and immediately started implementing on a branch without checking in. The user interrupted:
+"How come you aren't giving me a plan to approve?" The task-management workflow is explicit —
+"Verify Plan: Check in before starting implementation" — and a release task is exactly the case
+where the checkpoint matters most, because the tail end (merge, tag, NuGet publish) is
+irreversible and outward-facing.
+
+**Rule:** An energetic go-ahead in the task statement ("Go", "just do it") authorizes the
+*outcome*, not the omission of the plan-approval step. The plan check-in is cheap; an
+irreversible release built on an unapproved plan is not. Present the plan first, get the nod,
+then run autonomously to the end.
+
+**How to apply:** For any non-trivial task, and unconditionally for any task that ends in a
+publish/release/deploy: write `tasks/todo{timestamp}.md`, then STOP and present the plan for
+approval before the first implementation edit. Only skip the check-in when the user has
+approved the plan itself, not merely the goal.

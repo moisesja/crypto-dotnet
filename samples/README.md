@@ -22,7 +22,7 @@ e.g. `dotnet run --project samples/NetCrypto.Samples.Keys`.
 | `NetCrypto.Samples.KeyAgreement` | ECDH key agreement (X25519 and NIST curves) plus HKDF key derivation — Alice and Bob land on the same shared key. |
 | `NetCrypto.Samples.Encryption` | AEAD symmetric encryption (ciphertext + tag + associated data) and AES key wrap, including tamper-detection failure paths. |
 | `NetCrypto.Samples.Jwk` | `JwkConverter`: mapping NetCrypto's raw key model to and from RFC 7517 `JsonWebKey`. |
-| `NetCrypto.Samples.EvmSigning` | Recoverable secp256k1 signatures for Ethereum: signing a digest, recovering the public key/address, and the raw recovery-id boundary (PRD FR-12). |
+| `NetCrypto.Samples.EvmSigning` | Recoverable secp256k1 signatures for Ethereum: signing a digest, recovering the public key/address, the raw recovery-id boundary (PRD FR-12), and the `IRecoverableDigestSigner` abstraction for key-store/HSM-held keys. |
 | `NetCrypto.Samples.Bbs` | BBS signatures (BLS12-381) for selective disclosure: multi-message signing, proof derivation, and proof verification. |
 | `NetCrypto.Samples.DependencyInjection` | `AddNetCrypto()` wiring all default providers into `Microsoft.Extensions.DependencyInjection`, with application code depending only on interfaces. |
 

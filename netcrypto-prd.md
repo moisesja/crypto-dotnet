@@ -239,6 +239,52 @@ New thin extension (modeled on `NetDid.Extensions.DependencyInjection`): `public
 - [ ] Known-vector test: at least one published Ethereum-ecosystem recoverable-signature vector (cite source in test).
 - [ ] Wrong recoveryId recovers a different key or throws — never silently the right key.
 
+### FR-12b — Recoverable digest-signer abstraction (`IRecoverableDigestSigner`, 1.4.0, issue #21)
+
+The abstraction over FR-12, so secp256k1 keys held behind `ISigner`/`IKeyStore` (HSM-first,
+non-extractable) can produce recoverable digest signatures. Driver: net-did's did:ethr
+on-chain write path (EIP-155 transactions, ERC-1056 meta-transaction payloads), where the
+caller computes a Keccak-256 digest and needs it signed **as-is** with a recovery id by a key
+that may never leave its store.
+
+- `public readonly record struct RecoverableSignature(byte[] Signature64, int RecoveryId)` —
+  the 64-byte compact `R‖S` paired with the raw recovery id (0–3).
+- `public interface IRecoverableDigestSigner` — `KeyType`, `PublicKey`, and
+  `Task<RecoverableSignature> SignDigestAsync(ReadOnlyMemory<byte> digest32, CancellationToken ct = default)`.
+  The digest is signed as-is (no internal hashing); deterministic (RFC 6979) and low-S,
+  matching FR-12. secp256k1-only in this library (Ed25519/BLS have no recovery-id concept).
+- Implementations: `KeyPairSigner` (via the `KeyPair.WithPrivateKey` borrow — no private-key
+  heap copy, per FR-18) and `KeyStoreSigner` (delegates by alias; the `ISigner` returned by
+  `IKeyStore.CreateSignerAsync` pattern-matches to `IRecoverableDigestSigner`).
+  `IKeyStore.SignDigestAsync(alias, digest32, ct)` ships as a **default interface
+  implementation throwing `NotSupportedException`**, so external store implementations stay
+  source- and binary-compatible and opt in explicitly; `InMemoryKeyStore` implements it.
+- **Boundary:** FR-12's ruling is inherited verbatim — the raw recovery id only. Keccak-256
+  digest computation and EVM `v`-encoding (`27 + recid`, EIP-155 `35 + recid + 2·chainId`)
+  stay in the wallet layer and must NOT appear in NetCrypto.
+- Input contract (NFR-3): digest length ≠ 32 → parameter-named `ArgumentException` **before**
+  any crypto operation, at every entry point (both signers and the key store). Digest content
+  is opaque — no semantic validation (an all-zero digest is a valid ECDSA input).
+  Non-secp256k1 key → `NotSupportedException` naming the key type; unknown alias →
+  `KeyNotFoundException`; disposed signer/store → `ObjectDisposedException` — all matching
+  the corresponding `SignAsync` semantics.
+
+**Acceptance criteria:**
+- [ ] Round-trip: `SignDigestAsync` output recovers via `Secp256k1Recoverable.RecoverPublicKey`
+  to the signer's `PublicKey`, on the `KeyPairSigner`, `InMemoryKeyStore`, and
+  `CreateSignerAsync` → pattern-match paths (in-repo oracle).
+- [ ] Low-S (S ≤ n/2) and RFC 6979 determinism (same digest twice → identical signature and
+  recovery id) asserted through the abstraction.
+- [ ] External known-good vector: the EIP-155 example (private key `0x4646…46`, published
+  signing hash → published r/s and raw recid 0) reproduced through both the `KeyPairSigner`
+  and key-store paths — pinned against published bytes, not writer/reader parity.
+- [ ] Negative matrix: 0/31/33-byte digest → parameter-named `ArgumentException`;
+  Ed25519/P-256 signer → `NotSupportedException`; disposed signer/store →
+  `ObjectDisposedException`; store without an override → `NotSupportedException`; unknown
+  alias → `KeyNotFoundException`; non-secp256k1 alias → `NotSupportedException`.
+- [ ] A store implementation compiled against the pre-1.4.0 `IKeyStore` shape (no
+  `SignDigestAsync` override) still compiles — the DIM source-compatibility proof.
+
 ### FR-13 — AES-256-GCM (A256GCM)
 
 `public static class AesGcmCipher`: `Encrypt(key32, nonce12, plaintext, aad) → (ciphertext, tag16)` and `Decrypt(...)` throwing `CryptographicException` (BCL `AuthenticationTagMismatchException` acceptable) on tag failure. BCL-backed.
@@ -320,7 +366,7 @@ Every public API is exemplified by simple, runnable programs under `samples/`, f
    | `Bbs` | `IBbsCryptoProvider`, `BbsCiphersuite`, multi-message sign → verify → `DeriveProof` with selective disclosure → `VerifyProof`; checking `IsAvailable` and catching `BbsUnavailableException` as the graceful-degradation pattern |
    | `KeyAgreement` | X25519 `KeyAgreement`, raw `DeriveSharedSecret` (X25519 + P-256), feeding `ConcatKdf` and `Hkdf` — two parties deriving the same key |
    | `Hashing` | `Hash` (SHA-256/384/512), `Keccak256`, including a comment-level warning that Keccak-256 ≠ SHA3-256 |
-   | `EvmSigning` | `Secp256k1Recoverable` sign over a Keccak-256 digest, `RecoverPublicKey`, deriving an Ethereum address from the recovered key (usage illustration only — the `v`-encoding boundary note from FR-12 repeated in comments) |
+   | `EvmSigning` | `Secp256k1Recoverable` sign over a Keccak-256 digest, `RecoverPublicKey`, deriving an Ethereum address from the recovered key (usage illustration only — the `v`-encoding boundary note from FR-12 repeated in comments); the `IRecoverableDigestSigner`/`RecoverableSignature` abstraction over key-store-held keys (FR-12b) |
    | `Encryption` | `AesGcmCipher`, `AesCbcHmacCipher`, `XChaCha20Poly1305Cipher`, `AesKeyWrap` — encrypt/decrypt round-trips with AAD, plus a deliberate tamper showing the authentication failure |
    | `Jwk` | `JwkConverter` and `KeyPair.ToPublicJwk()/ToPrivateJwk()` round-trips; printing the JWK JSON |
    | `DependencyInjection` | `AddNetCrypto()`, resolving the interfaces, and overriding a default registration (the Posture-1 swap seam) |
@@ -519,7 +565,7 @@ Normative completeness check for concept §8 package-level criterion 6 ("surface
 |---|---|---|---|
 | §2.1 | Signatures — EdDSA, NIST ECDSA (both formats), secp256k1, BLS12-381 | net-did, dataproofs-dotnet, credentials-dotnet | FR-2, FR-3 |
 | §2.1 | BBS sign / verify / proof-gen / proof-verify | credentials-dotnet (`bbs-2023`) | FR-5 |
-| §2.2 | Recoverable secp256k1 over caller digest | did:ethr, EVM payments (wallet layer) | FR-12 |
+| §2.2 | Recoverable secp256k1 over caller digest | did:ethr, EVM payments (wallet layer) | FR-12, FR-12b |
 | §2.3 | X25519 agreement; raw ECDH Z (X25519, P-256, P-384, P-521); Concat KDF; HKDF | didcomm-dotnet (ECDH-ES / ECDH-1PU composition) | FR-3, FR-4 |
 | §2.4 | SHA-2 helpers; Keccak-256 | credentials-dotnet (SD-JWT); did:ethr | FR-10, FR-11 |
 | §2.5 | A256GCM; A256CBC-HS512; A256KW; XC20P | didcomm-dotnet (DIDComm v2.1 suites) | FR-13, FR-14, FR-15, FR-16 |
