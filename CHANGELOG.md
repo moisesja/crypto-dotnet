@@ -38,11 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`KeyStoreSigner.SignDigestAsync` verifies the store's output at the boundary.** Because the
   backing `IKeyStore` may be an arbitrary external provider (HSM, cloud KMS), the returned
   signature is now checked before being handed back: it must be a structurally valid recoverable
-  signature (64-byte `R‖S`, recovery id 0–3) **and** must recover to the signer's advertised
-  `PublicKey`, otherwise a `CryptographicException` is thrown. This closes two review findings — a
-  malformed provider result silently passing through the non-nullable API, and alias rebinding
-  (delete + recreate a key under the same alias) letting an old signer emit a signature that
-  recovers to a *different* key than it advertises. (#21)
+  signature (64-byte `R‖S`, recovery id 0–3), must be low-S normalized, **and** must recover to
+  the signer's advertised `PublicKey`, otherwise a `CryptographicException` is thrown. The
+  provider-owned signature array is cloned before validation and only the verified clone is
+  returned; the advertised public key is held as a private snapshot; and separate digest copies
+  are retained for verification and passed to the provider. A cached non-secp256k1 key type is
+  rejected before the provider is called. This closes review findings covering malformed and
+  high-S provider results, mutable provider/caller buffers, and alias rebinding (delete + recreate
+  a key under the same alias) letting an old signer emit a signature that recovers to a
+  *different* key than it advertises. (#21)
 - **The `IKeyStore.SignDigestAsync` default implementation now validates the digest length** (bad
   length → parameter-named `ArgumentException("digest32")`) before signalling `NotSupportedException`,
   so the "parameter-named `ArgumentException` at every entry point" contract holds for stores that

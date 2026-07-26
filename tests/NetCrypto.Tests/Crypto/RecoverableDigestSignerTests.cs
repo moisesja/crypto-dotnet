@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using FluentAssertions;
 using NetCrypto;
@@ -348,12 +349,157 @@ public class RecoverableDigestSignerTests
     public async Task KeyStoreSigner_SignDigestAsync_MalformedStoreOutput_ThrowsCryptographic()
     {
         var realPublicKey = _keyGen.Generate(KeyType.Secp256k1).PublicKey;
-        var signer = new KeyStoreSigner(new MalformedOutputStore(), "alias", KeyType.Secp256k1, realPublicKey);
+        var signer = new KeyStoreSigner(
+            new FixedOutputStore(new RecoverableSignature([0x01], 27)),
+            "alias",
+            KeyType.Secp256k1,
+            realPublicKey);
 
-        // MalformedOutputStore returns Signature64 of length 1 with RecoveryId 27 — neither the
+        // The fixed-output store returns Signature64 of length 1 with RecoveryId 27 — neither the
         // documented 64-byte R‖S nor a raw 0–3 recovery id.
         await FluentActions.Awaiting(() => signer.SignDigestAsync(new byte[32]))
             .Should().ThrowAsync<CryptographicException>();
+    }
+
+    [Fact]
+    public async Task KeyStoreSigner_SignDigestAsync_NonSecp256k1_ThrowsBeforeTouchingStore()
+    {
+        var store = new FixedOutputStore(new RecoverableSignature([0x01], 27));
+        var signer = new KeyStoreSigner(store, "ed", KeyType.Ed25519, new byte[32]);
+
+        await FluentActions.Awaiting(() => signer.SignDigestAsync(new byte[32]))
+            .Should().ThrowAsync<NotSupportedException>()
+            .WithMessage($"*{KeyType.Ed25519}*");
+        store.CallCount.Should().Be(0, "the signer already knows the key type is unsupported");
+    }
+
+    [Fact]
+    public async Task KeyStoreSigner_SignDigestAsync_HighSWithAdjustedRecoveryId_ThrowsCryptographic()
+    {
+        using var keyPair = _keyGen.Generate(KeyType.Secp256k1);
+        var digest = new byte[32];
+        new Random(22).NextBytes(digest);
+        var (lowSignature, lowRecoveryId) = keyPair.WithPrivateKey(
+            privateKey => Secp256k1Recoverable.Sign(privateKey, digest));
+
+        var lowS = new BigInteger(lowSignature.AsSpan(32), isUnsigned: true, isBigEndian: true);
+        var highS = CurveOrderN - lowS;
+        var highSignature = (byte[])lowSignature.Clone();
+        ToBigEndian32(highS).CopyTo(highSignature, 32);
+        var highRecoveryId = lowRecoveryId ^ 1;
+
+        (highS > HalfCurveOrder).Should().BeTrue();
+        Secp256k1Recoverable.RecoverPublicKey(
+                digest, highSignature, highRecoveryId, compressed: true)
+            .Should().Equal(keyPair.PublicKey,
+                "flipping recovery parity makes the malleated high-S form recover the same key");
+
+        var signer = new KeyStoreSigner(
+            new FixedOutputStore(new RecoverableSignature(highSignature, highRecoveryId)),
+            "evm",
+            KeyType.Secp256k1,
+            keyPair.PublicKey);
+
+        await FluentActions.Awaiting(() => signer.SignDigestAsync(digest))
+            .Should().ThrowAsync<CryptographicException>()
+            .WithMessage("*low-S*");
+    }
+
+    [Fact]
+    public async Task KeyStoreSigner_SignDigestAsync_ReturnsDefensiveCopyOfStoreBuffer()
+    {
+        using var keyPair = _keyGen.Generate(KeyType.Secp256k1);
+        var digest = new byte[32];
+        new Random(23).NextBytes(digest);
+        var (storeOwnedBytes, recoveryId) = keyPair.WithPrivateKey(
+            privateKey => Secp256k1Recoverable.Sign(privateKey, digest));
+        var expected = (byte[])storeOwnedBytes.Clone();
+        var signer = new KeyStoreSigner(
+            new FixedOutputStore(new RecoverableSignature(storeOwnedBytes, recoveryId)),
+            "evm",
+            KeyType.Secp256k1,
+            keyPair.PublicKey);
+
+        var result = await signer.SignDigestAsync(digest);
+        Array.Clear(storeOwnedBytes);
+
+        result.Signature64.Should().Equal(expected,
+            "a provider retaining its own buffer must not invalidate output after boundary verification");
+        result.Signature64.Should().NotBeSameAs(storeOwnedBytes);
+    }
+
+    [Fact]
+    public async Task KeyStoreSigner_SignDigestAsync_ConstructorPublicKeyMutation_CannotChangeIdentity()
+    {
+        using var originalKey = _keyGen.Generate(KeyType.Secp256k1);
+        using var replacementKey = _keyGen.Generate(KeyType.Secp256k1);
+        var digest = new byte[32];
+        new Random(24).NextBytes(digest);
+        var replacementSignature = replacementKey.WithPrivateKey(
+            privateKey => Secp256k1Recoverable.Sign(privateKey, digest));
+        var constructorPublicKey = originalKey.PublicKey;
+        var advertisedPublicKey = (byte[])constructorPublicKey.Clone();
+        var signer = new KeyStoreSigner(
+            new FixedOutputStore(new RecoverableSignature(
+                replacementSignature.Signature64,
+                replacementSignature.RecoveryId)),
+            "evm",
+            KeyType.Secp256k1,
+            constructorPublicKey);
+
+        replacementKey.PublicKey.CopyTo(constructorPublicKey, 0);
+
+        await FluentActions.Awaiting(() => signer.SignDigestAsync(digest))
+            .Should().ThrowAsync<CryptographicException>();
+        signer.PublicKey.ToArray().Should().Equal(advertisedPublicKey);
+    }
+
+    [Fact]
+    public async Task KeyStoreSigner_SignDigestAsync_ExposedPublicKeyMemory_CannotChangeIdentity()
+    {
+        using var originalKey = _keyGen.Generate(KeyType.Secp256k1);
+        using var replacementKey = _keyGen.Generate(KeyType.Secp256k1);
+        var digest = new byte[32];
+        new Random(25).NextBytes(digest);
+        var replacementSignature = replacementKey.WithPrivateKey(
+            privateKey => Secp256k1Recoverable.Sign(privateKey, digest));
+        var advertisedPublicKey = originalKey.PublicKey;
+        var signer = new KeyStoreSigner(
+            new FixedOutputStore(new RecoverableSignature(
+                replacementSignature.Signature64,
+                replacementSignature.RecoveryId)),
+            "evm",
+            KeyType.Secp256k1,
+            advertisedPublicKey);
+        var exposedMemory = signer.PublicKey;
+        MemoryMarshal.TryGetArray(exposedMemory, out var exposedSegment).Should().BeTrue();
+
+        replacementKey.PublicKey.CopyTo(exposedSegment.Array!, exposedSegment.Offset);
+
+        await FluentActions.Awaiting(() => signer.SignDigestAsync(digest))
+            .Should().ThrowAsync<CryptographicException>();
+        signer.PublicKey.ToArray().Should().Equal(advertisedPublicKey);
+    }
+
+    [Fact]
+    public async Task KeyStoreSigner_SignDigestAsync_StoreCannotMutateCallerOrVerificationDigest()
+    {
+        using var keyPair = _keyGen.Generate(KeyType.Secp256k1);
+        var callerDigest = new byte[32];
+        new Random(26).NextBytes(callerDigest);
+        var originalDigest = (byte[])callerDigest.Clone();
+        var replacementDigest = new byte[32];
+        new Random(27).NextBytes(replacementDigest);
+        var signer = new KeyStoreSigner(
+            new DigestMutatingStore(keyPair, replacementDigest),
+            "evm",
+            KeyType.Secp256k1,
+            keyPair.PublicKey);
+
+        await FluentActions.Awaiting(() => signer.SignDigestAsync(callerDigest))
+            .Should().ThrowAsync<CryptographicException>();
+        callerDigest.Should().Equal(originalDigest,
+            "an arbitrary store must never receive the caller-owned digest buffer");
     }
 
     // A well-behaved store's valid output still round-trips through the new verification.
@@ -431,15 +577,19 @@ public class RecoverableDigestSignerTests
     }
 
     /// <summary>
-    /// A hostile/buggy store standing in for an external HSM or KMS provider: it returns a
-    /// structurally invalid <see cref="RecoverableSignature"/> (1-byte signature, out-of-range
-    /// recovery id) that <see cref="KeyStoreSigner"/> must reject at the boundary rather than
-    /// propagate through its non-nullable, contractually-64-byte API.
+    /// A controllable store standing in for an external HSM or KMS provider. It returns the exact
+    /// supplied result and records whether the signer touched it, enabling hostile-output and
+    /// fail-fast boundary tests.
     /// </summary>
-    private sealed class MalformedOutputStore : IKeyStore
+    private sealed class FixedOutputStore(RecoverableSignature result) : IKeyStore
     {
+        public int CallCount { get; private set; }
+
         public Task<RecoverableSignature> SignDigestAsync(string alias, ReadOnlyMemory<byte> digest32, CancellationToken ct = default)
-            => Task.FromResult(new RecoverableSignature([0x01], 27));
+        {
+            CallCount++;
+            return Task.FromResult(result);
+        }
 
         public Task<StoredKeyInfo> GenerateAsync(string alias, KeyType keyType, CancellationToken ct = default)
             => throw new NotImplementedException();
@@ -457,6 +607,50 @@ public class RecoverableDigestSignerTests
             => throw new NotImplementedException();
 
         public Task<byte[]> DeriveSharedSecretAsync(string alias, ReadOnlyMemory<byte> peerPublicKey, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<IReadOnlyList<string>> ListAsync(CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<bool> DeleteAsync(string alias, CancellationToken ct = default)
+            => throw new NotImplementedException();
+    }
+
+    private sealed class DigestMutatingStore(KeyPair keyPair, byte[] replacementDigest) : IKeyStore
+    {
+        public Task<RecoverableSignature> SignDigestAsync(
+            string alias,
+            ReadOnlyMemory<byte> digest32,
+            CancellationToken ct = default)
+        {
+            if (!MemoryMarshal.TryGetArray(digest32, out var segment) || segment.Array is null)
+                throw new InvalidOperationException("The test store expected array-backed digest memory.");
+
+            replacementDigest.CopyTo(segment.Array, segment.Offset);
+            var (signature, recoveryId) = keyPair.WithPrivateKey(
+                privateKey => Secp256k1Recoverable.Sign(privateKey, digest32.Span));
+            return Task.FromResult(new RecoverableSignature(signature, recoveryId));
+        }
+
+        public Task<StoredKeyInfo> GenerateAsync(string alias, KeyType keyType, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<StoredKeyInfo> ImportAsync(string alias, KeyPair importedKeyPair, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<StoredKeyInfo?> GetInfoAsync(string alias, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<byte[]> SignAsync(string alias, ReadOnlyMemory<byte> data, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<ISigner> CreateSignerAsync(string alias, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<byte[]> DeriveSharedSecretAsync(
+            string alias,
+            ReadOnlyMemory<byte> peerPublicKey,
+            CancellationToken ct = default)
             => throw new NotImplementedException();
 
         public Task<IReadOnlyList<string>> ListAsync(CancellationToken ct = default)

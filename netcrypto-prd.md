@@ -264,10 +264,16 @@ that may never leave its store.
 - **Boundary verification (external-store defense).** Because the backing `IKeyStore` may be an
   arbitrary provider (HSM, cloud KMS), `KeyStoreSigner.SignDigestAsync` verifies the store's
   returned signature before handing it back: it must be structurally valid (64-byte `R‖S`,
-  recovery id 0–3) **and** must recover to the signer's advertised `PublicKey`, else
-  `CryptographicException`. This prevents a malformed provider result from propagating through the
-  non-nullable API and prevents alias rebinding (delete + recreate under the same alias) from
-  letting a signer emit a signature that recovers to a different key than it advertises.
+  recovery id 0–3), low-S normalized, **and** must recover to the signer's advertised `PublicKey`,
+  else `CryptographicException`. The provider-owned byte array is cloned before validation and
+  only the verified clone is returned. The advertised public key is held as a private defensive
+  snapshot, and signing uses two digest snapshots: a verification copy retained by the signer and
+  a separate copy handed to the provider. `KeyStoreSigner` also rejects a cached non-secp256k1
+  `KeyType` before touching the store. These checks prevent malformed, malleable, mutable, or
+  wrong-key provider results from propagating through the abstraction; prevent provider mutation
+  of caller/verification buffers; and prevent alias rebinding (delete + recreate under the same
+  alias) from letting a signer emit a signature that recovers to a different key than it
+  advertises.
 - `RecoverableSignature` equality is reference-based on `Signature64` (documented; consistent with
   the `Secp256k1Recoverable.Sign` tuple) — value comparison is the caller's responsibility.
 - **Boundary:** FR-12's ruling is inherited verbatim — the raw recovery id only. Keccak-256
@@ -298,8 +304,12 @@ that may never leave its store.
 - [ ] Boundary verification: alias rebinding (delete + recreate under the same alias) and an
   advertised-key mismatch each make `KeyStoreSigner.SignDigestAsync` throw `CryptographicException`
   rather than return a signature that recovers to the wrong key; a store returning a structurally
-  invalid signature (wrong length / out-of-range recid) is rejected the same way; a well-behaved
-  store's valid output still round-trips.
+  invalid signature (wrong length / out-of-range recid) or a high-S signature with adjusted
+  recovery parity is rejected the same way; a non-secp256k1 signer fails before touching the
+  store; a store-retained result buffer cannot mutate the caller's returned signature; and a
+  provider cannot change signer identity by mutating constructor/exposed public-key buffers or
+  change the signed request by mutating its digest input; a well-behaved store's valid output
+  still round-trips.
 - [ ] The `IKeyStore.SignDigestAsync` DIM default throws parameter-named `ArgumentException("digest32")`
   on a wrong-length digest (0/31/33 bytes), before the `NotSupportedException` unsupported signal.
 

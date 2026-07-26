@@ -186,7 +186,7 @@ will be built or published; it must not block routine execution the user already
 it, and submit the review in the same run. Only stop for clarification when the repository or PR
 cannot be resolved safely, or when the requested external action is genuinely ambiguous.
 
-## L8 — Adversarial coverage for a delegation/boundary type must probe state-mutation-under-a-live-handle and full backend-output passthrough, not just input guards
+## L9 — Adversarial coverage for a delegation/boundary type must probe state-mutation-under-a-live-handle and full backend-output passthrough, not just input guards
 
 **Context:** For issue #21 I ran an adversarial pass that reported "57 exploit tests, zero
 findings" and declared the code sound. Two human reviews and a second, deeper adversarial pass
@@ -220,3 +220,10 @@ and reuse the handle; return malformed AND wrong-but-valid output from a test-do
 good input; and assert `recover(output) == advertised identity`. Only after those run may the pass
 claim the seam is sound. The fix pattern for (a)+(c) here was a recover-and-compare guard at the
 wrapper boundary; for (b), structural validation of the backend's result before returning it.
+
+The second pass exposed the same rule on mutable buffers in both directions. A wrapper that caches
+identity bytes must clone constructor input and keep its internal snapshot separate from any memory
+it exposes. A wrapper that sends caller bytes to an arbitrary provider needs two copies when it
+must verify the original request after the provider returns: one private verification snapshot and
+one provider copy. Passing the verification snapshot itself is insufficient because a provider can
+recover and mutate the backing array of `ReadOnlyMemory<byte>`.
