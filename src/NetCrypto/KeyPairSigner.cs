@@ -9,7 +9,7 @@ namespace NetCrypto;
 /// constructor when the key pair's lifecycle is managed elsewhere. Callers that never dispose
 /// keep the pre-1.2.0 behavior unchanged.
 /// </remarks>
-public sealed class KeyPairSigner : ISigner, IDisposable
+public sealed class KeyPairSigner : ISigner, IRecoverableDigestSigner, IDisposable
 {
     private readonly KeyPair _keyPair;
     private readonly ICryptoProvider _crypto;
@@ -73,6 +73,24 @@ public sealed class KeyPairSigner : ISigner, IDisposable
         // unzeroed private-key copy on the heap per signature.
         var sig = _keyPair.WithPrivateKey(privateKey => _crypto.Sign(_keyPair.KeyType, privateKey, data.Span));
         return Task.FromResult(sig);
+    }
+
+    /// <inheritdoc />
+    /// <exception cref="ObjectDisposedException">The signer has been disposed.</exception>
+    public Task<RecoverableSignature> SignDigestAsync(ReadOnlyMemory<byte> digest32, CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (digest32.Length != 32)
+            throw new ArgumentException($"Digest must be 32 bytes, got {digest32.Length}.", nameof(digest32));
+        if (_keyPair.KeyType != KeyType.Secp256k1)
+            throw new NotSupportedException(
+                $"Recoverable digest signing requires a secp256k1 key; this signer holds {_keyPair.KeyType}.");
+
+        // Borrow instead of reading KeyPair.PrivateKey: the clone-per-read getter would leave one
+        // unzeroed private-key copy on the heap per signature.
+        var (signature, recoveryId) = _keyPair.WithPrivateKey(
+            privateKey => Secp256k1Recoverable.Sign(privateKey, digest32.Span));
+        return Task.FromResult(new RecoverableSignature(signature, recoveryId));
     }
 
     /// <summary>

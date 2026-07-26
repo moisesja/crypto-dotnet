@@ -126,6 +126,40 @@ catch (Exception ex)
 }
 Console.WriteLine();
 
+// -------------------------------------------------------
+// 7. The abstraction: IRecoverableDigestSigner
+// -------------------------------------------------------
+Console.WriteLine("=== IRecoverableDigestSigner — key-store/HSM-held keys ===");
+
+// Secp256k1Recoverable.Sign needs the raw private scalar — which an HSM or key
+// store never hands out. IRecoverableDigestSigner is the same operation behind
+// the signer abstraction: a 32-byte digest goes in (signed as-is, no hashing),
+// a RecoverableSignature (Signature64 + raw RecoveryId) comes out, and the
+// private key stays wherever it lives. The FR-12 boundary is unchanged: the
+// wallet layer still owns keccak and v-encoding.
+var crypto = new DefaultCryptoProvider();
+
+// KeyPairSigner implements it for in-memory keys. Same key + digest as above,
+// so RFC 6979 determinism means the bytes must match the primitive exactly.
+using var keyPairSigner = new KeyPairSigner(keyGen.FromPrivateKey(KeyType.Secp256k1, privateKey), crypto);
+RecoverableSignature viaKeyPair = await keyPairSigner.SignDigestAsync(digest);
+Check(viaKeyPair.Signature64.AsSpan().SequenceEqual(signature) && viaKeyPair.RecoveryId == recoveryId,
+    "KeyPairSigner.SignDigestAsync matches the primitive (RFC 6979 determinism)");
+
+// Any IKeyStore can opt in (InMemoryKeyStore does; the interface default throws
+// NotSupportedException, so stores that predate the member keep compiling). The
+// signer from CreateSignerAsync pattern-matches to the new interface — this is
+// how a wallet flow accepts "any secp256k1 signer, extractable or not".
+using var store = new InMemoryKeyStore(keyGen, crypto);
+await store.ImportAsync("evm-key", keyGen.FromPrivateKey(KeyType.Secp256k1, privateKey));
+var storeSigner = await store.CreateSignerAsync("evm-key");
+Check(storeSigner is IRecoverableDigestSigner, "the store's signer supports recoverable digest signing");
+var viaStore = await ((IRecoverableDigestSigner)storeSigner).SignDigestAsync(digest);
+Console.WriteLine($"  Store-held key signed the digest; recid {viaStore.RecoveryId} (raw, as always)");
+Check(viaStore.Signature64.AsSpan().SequenceEqual(signature),
+    "key-store signature matches — the private key never left the store");
+Console.WriteLine();
+
 Console.WriteLine("Done! All EVM signing examples completed successfully.");
 return 0;
 

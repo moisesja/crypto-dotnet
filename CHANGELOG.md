@@ -5,6 +5,57 @@ All notable changes to **NetCrypto** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-07-26
+
+### Added
+
+- **`IRecoverableDigestSigner`** — the abstraction over the FR-12 recoverable-secp256k1
+  primitive, so keys held behind `ISigner`/`IKeyStore` (HSM-first, non-extractable) can produce
+  recoverable digest signatures for EVM flows (did:ethr EIP-155 transactions, ERC-1056
+  meta-transactions). `SignDigestAsync(digest32, ct)` signs a caller-supplied 32-byte digest
+  **as-is** (no internal hashing) and returns a **`RecoverableSignature`** — a new
+  `readonly record struct` pairing the 64-byte compact `R‖S` with the **raw** recovery id
+  (0–3). The FR-12 boundary is inherited verbatim: no Keccak and no EVM `v`-encoding anywhere
+  in NetCrypto; both remain the wallet layer's job. (#21)
+- **Implementations:** `KeyPairSigner` and `KeyStoreSigner` now implement
+  `IRecoverableDigestSigner` (the signer returned by `IKeyStore.CreateSignerAsync`
+  pattern-matches to it), and `InMemoryKeyStore` implements the new
+  **`IKeyStore.SignDigestAsync(alias, digest32, ct)`** member. On `IKeyStore` the member ships
+  as a **default interface implementation that throws `NotSupportedException`**, so every
+  external store implementation stays source- and binary-compatible and opts in explicitly.
+  `KeyPairSigner`/`InMemoryKeyStore` sign via the `KeyPair.WithPrivateKey` borrow (no
+  private-key heap copy, consistent with the #17 zeroization work). (#21)
+- Input contract (NFR-3): a digest that is not exactly 32 bytes throws a parameter-named
+  `ArgumentException` before any crypto operation at every entry point; a non-secp256k1 key
+  throws `NotSupportedException` naming the key type (recoverable ECDSA is a secp256k1
+  capability — Ed25519/BLS have no recovery-id concept); unknown alias throws
+  `KeyNotFoundException` and disposed signer/store throws `ObjectDisposedException`, matching
+  the existing `SignAsync` semantics. The digest content is opaque — no semantic validation
+  (an all-zero digest is a valid ECDSA input). (#21)
+
+### Security
+
+- **`KeyStoreSigner.SignDigestAsync` verifies the store's output at the boundary.** Because the
+  backing `IKeyStore` may be an arbitrary external provider (HSM, cloud KMS), the returned
+  signature is now checked before being handed back: it must be a structurally valid recoverable
+  signature (64-byte `R‖S`, recovery id 0–3), must be low-S normalized, **and** must recover to
+  the signer's advertised `PublicKey`, otherwise a `CryptographicException` is thrown. The
+  provider-owned signature array is cloned before validation and only the verified clone is
+  returned; the advertised public key is held as a private snapshot; and separate digest copies
+  are retained for verification and passed to the provider. A cached non-secp256k1 key type is
+  rejected before the provider is called. This closes review findings covering malformed and
+  high-S provider results, mutable provider/caller buffers, and alias rebinding (delete + recreate
+  a key under the same alias) letting an old signer emit a signature that recovers to a
+  *different* key than it advertises. (#21)
+- **The `IKeyStore.SignDigestAsync` default implementation now validates the digest length** (bad
+  length → parameter-named `ArgumentException("digest32")`) before signalling `NotSupportedException`,
+  so the "parameter-named `ArgumentException` at every entry point" contract holds for stores that
+  rely on the default. (#21)
+- **`RecoverableSignature` equality is documented as reference-based** on `Signature64` (matching the
+  raw-tuple return of `Secp256k1Recoverable.Sign`): RFC 6979 determinism makes two signings of the
+  same key+digest byte-identical, but the values are not `Equals`/`==`-equal, so callers building
+  deduplication or replay caches must compare `Signature64` by content. (#21)
+
 ## [1.3.0] - 2026-07-24
 
 ### Added
