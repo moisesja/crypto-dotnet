@@ -60,7 +60,7 @@ Every primitive is tested against the test vectors of its governing specificatio
 |---|---|---|---|---|
 | Signatures | EdDSA (Ed25519) | NSec (libsodium) | RFC 8032 | §7.1 TEST 1–3 |
 | Signatures | ECDSA P-256 / P-384 / P-521, DER and IEEE P1363 | .NET BCL | FIPS 186-5 | cross-format + round-trip |
-| Signatures | ECDSA secp256k1 (SHA-256 prehash, 64-byte compact) | NBitcoin.Secp256k1 | SEC 2 | round-trip + parity |
+| Signatures | ECDSA secp256k1 (SHA-256 prehash, 64-byte compact; low-S signing, low/high-S verification) | NBitcoin.Secp256k1 | SEC 2 / RFC 8812 ES256K | round-trip + high-S interop |
 | Signatures | Recoverable secp256k1 over a caller-supplied digest | NBitcoin.Secp256k1 | SEC 2; raw recovery id (no EVM `v`-encoding) | EIP-155 example vector |
 | Signatures | BLS12-381 (G1 and G2 variants, hash-to-curve) | Nethermind.Crypto.Bls | RFC 9380 DSTs | round-trip + parity |
 | Signatures | **BBS** (multi-message, selective disclosure) | zkryptium 0.6 via Rust FFI | **draft-irtf-cfrg-bbs-signatures-10 (pinned)** | §8.4.1 BLS12-381-SHA-256 KeyGen fixture |
@@ -76,6 +76,23 @@ Every primitive is tested against the test vectors of its governing specificatio
 | Key wrap | AES Key Wrap (`A256KW`) | managed | RFC 3394 | §4.3, §4.6 |
 | Key model | `KeyType` ⇄ multicodec, `MultibasePublicKey` | NetCid | multiformats | golden parity values |
 | Key repr. | JWK ⇄ raw key bytes (all key types) | Microsoft.IdentityModel.Tokens | RFC 7517 | round-trips |
+
+**ECDSA signatures are not unique per message.** For every ECDSA key type above — P-256, P-384,
+P-521 and secp256k1 — both `(R, S)` and `(R, n − S)` are valid signatures over the same key and
+message, and `Verify` accepts both. Neither FIPS 186-5 nor RFC 8812 imposes a low-S rule; that is
+a Bitcoin/BIP-62 convention. Two consequences worth designing around:
+
+- **Never key a replay cache, dedup set, or idempotency check on signature bytes.** Re-submitting
+  the other encoding defeats it. Bind replay protection to the message — a nonce, `jti`, or digest.
+- **If your protocol requires BIP-62/EIP-2 canonical signatures, enforce `S ≤ n/2` yourself** at
+  your boundary. NetCrypto's own `KeyStoreSigner` does exactly this for recoverable EVM output.
+
+secp256k1 signing remains deterministic and low-S; only verification is permissive, normalizing a
+valid high-S signature to its equivalent low-S form before the Bitcoin-oriented backend check so
+RFC 8812 ES256K peers interoperate ([#23](https://github.com/moisesja/crypto-dotnet/issues/23)).
+This aligned secp256k1 with the NIST curves' long-standing behavior rather than introducing a new
+one. `Secp256k1Recoverable` is likewise high-S tolerant and documents that recovery hands the
+canonicality decision to the caller.
 
 > **BBS terminology.** "BBS" is the CFRG name for the scheme historically called BBS+.
 > Conformance is pinned to draft-10 via zkryptium 0.6; the `BbsCiphersuite` parameter

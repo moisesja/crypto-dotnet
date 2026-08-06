@@ -1,3 +1,4 @@
+using System.Numerics;
 using FluentAssertions;
 using NetCrypto;
 
@@ -5,6 +6,11 @@ namespace NetCrypto.Tests.Crypto;
 
 public class DefaultCryptoProviderTests
 {
+    private static readonly BigInteger Secp256k1Order = new(
+        Convert.FromHexString("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"),
+        isUnsigned: true,
+        isBigEndian: true);
+
     private readonly DefaultCryptoProvider _crypto = new();
     private readonly DefaultKeyGenerator _keyGen = new();
 
@@ -281,6 +287,212 @@ public class DefaultCryptoProviderTests
 
         signature.Should().HaveCount(64); // compact format
         valid.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Verify_Secp256k1_HighSEquivalent_AcceptsRfc8812Signature()
+    {
+        var privateKey = new byte[32];
+        privateKey[^1] = 1;
+        var keyPair = _keyGen.FromPrivateKey(KeyType.Secp256k1, privateKey);
+        var data = "RFC 8812 ES256K high-S interoperability"u8.ToArray();
+        var lowSignature = _crypto.Sign(KeyType.Secp256k1, keyPair.PrivateKey, data);
+
+        var lowS = ReadScalar(lowSignature.AsSpan(32));
+        var highS = Secp256k1Order - lowS;
+        var highSignature = (byte[])lowSignature.Clone();
+        WriteScalar(highS, highSignature.AsSpan(32));
+        var uncompressedPublicKey = KeyType.Secp256k1.ToUncompressed(keyPair.PublicKey);
+
+        lowS.Should().BeGreaterThan(BigInteger.Zero);
+        lowS.Should().BeLessThanOrEqualTo(Secp256k1Order / 2);
+        highS.Should().BeGreaterThan(Secp256k1Order / 2);
+        highS.Should().BeLessThan(Secp256k1Order);
+        (lowS + highS).Should().Be(Secp256k1Order);
+        highSignature.AsSpan(0, 32).SequenceEqual(lowSignature.AsSpan(0, 32)).Should().BeTrue(
+            "malleating S must leave R byte-identical");
+
+        _crypto.Verify(KeyType.Secp256k1, keyPair.PublicKey, data, lowSignature).Should().BeTrue();
+        _crypto.Verify(KeyType.Secp256k1, keyPair.PublicKey, data, highSignature).Should().BeTrue();
+        _crypto.Verify(KeyType.Secp256k1, keyPair.PublicKey, data, highSignature, EcdsaSignatureFormat.Der)
+            .Should().BeTrue("the format argument is ignored for compact secp256k1 signatures");
+        _crypto.Verify(KeyType.Secp256k1, keyPair.PublicKey, data, highSignature, EcdsaSignatureFormat.IeeeP1363)
+            .Should().BeTrue("the format argument is ignored for compact secp256k1 signatures");
+        _crypto.Verify(KeyType.Secp256k1, uncompressedPublicKey, data, highSignature)
+            .Should().BeTrue("high-S verification must work with either accepted SEC1 public-key encoding");
+    }
+
+    [Fact]
+    public void Verify_Secp256k1_HighSEquivalent_RemainsBoundToKeyAndData()
+    {
+        var keyPair = _keyGen.Generate(KeyType.Secp256k1);
+        var otherKeyPair = _keyGen.Generate(KeyType.Secp256k1);
+        var data = "high-S signatures remain ordinary ECDSA signatures"u8.ToArray();
+        var lowSignature = _crypto.Sign(KeyType.Secp256k1, keyPair.PrivateKey, data);
+        var highSignature = ToHighS(lowSignature);
+        var tamperedR = (byte[])highSignature.Clone();
+        tamperedR[0] ^= 0x01;
+
+        // S is the only scalar with a second valid representation. Negating R is the structurally
+        // identical transformation applied to the other half, and it must stay rejected — this is
+        // the property that proves normalization widened the accept set by exactly one encoding.
+        var negatedR = (byte[])lowSignature.Clone();
+        WriteScalar(Secp256k1Order - ReadScalar(lowSignature.AsSpan(0, 32)), negatedR.AsSpan(0, 32));
+        var negatedBoth = ToHighS(negatedR);
+
+        _crypto.Verify(KeyType.Secp256k1, keyPair.PublicKey, "different data"u8, highSignature)
+            .Should().BeFalse();
+        _crypto.Verify(KeyType.Secp256k1, otherKeyPair.PublicKey, data, highSignature)
+            .Should().BeFalse();
+        _crypto.Verify(KeyType.Secp256k1, keyPair.PublicKey, data, tamperedR)
+            .Should().BeFalse();
+        _crypto.Verify(KeyType.Secp256k1, keyPair.PublicKey, data, negatedR)
+            .Should().BeFalse("(n-R, S) is not a valid signature — only S has a second representation");
+        _crypto.Verify(KeyType.Secp256k1, keyPair.PublicKey, data, negatedBoth)
+            .Should().BeFalse("(n-R, n-S) is not a valid signature either");
+    }
+
+    // Two distinct rejection reasons are asserted together because both must surface the same way
+    // — false, never an exception. Zero/out-of-range scalars are structurally invalid; the
+    // half-order and n-1 cases are perfectly valid scalars that simply are not a signature for
+    // this key, and they pin that normalization does not change the boundary at S == n/2.
+    [Fact]
+    public void Verify_Secp256k1_NonVerifyingCompactScalars_ReturnFalseWithoutThrowing()
+    {
+        var keyPair = _keyGen.Generate(KeyType.Secp256k1);
+        var data = "invalid compact scalar boundaries"u8.ToArray();
+        var one = new BigInteger(1);
+        var halfOrder = Secp256k1Order / 2;
+        var invalidSignatures = new[]
+        {
+            CompactSignature(BigInteger.Zero, one),
+            CompactSignature(one, BigInteger.Zero),
+            CompactSignature(Secp256k1Order, one),
+            CompactSignature(one, Secp256k1Order),
+            CompactSignature(one, Secp256k1Order + one),
+            CompactSignature(one, Secp256k1Order - one),
+            CompactSignature(one, halfOrder),
+            CompactSignature(one, halfOrder + one),
+            Enumerable.Repeat((byte)0xff, 64).ToArray()
+        };
+
+        foreach (var signature in invalidSignatures)
+        {
+            var verify = () => _crypto.Verify(KeyType.Secp256k1, keyPair.PublicKey, data, signature);
+            verify.Should().NotThrow();
+            verify().Should().BeFalse();
+        }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(31)]
+    [InlineData(32)]
+    [InlineData(63)]
+    [InlineData(65)]
+    [InlineData(128)]
+    public void Verify_Secp256k1_InvalidCompactLength_ReturnsFalseWithoutThrowing(int length)
+    {
+        var keyPair = _keyGen.Generate(KeyType.Secp256k1);
+        var verify = () => _crypto.Verify(
+            KeyType.Secp256k1, keyPair.PublicKey, "invalid compact length"u8, new byte[length]);
+
+        verify.Should().NotThrow();
+        verify().Should().BeFalse();
+    }
+
+    [Fact]
+    public void Sign_Secp256k1_RemainsLowS()
+    {
+        var keyPair = _keyGen.Generate(KeyType.Secp256k1);
+
+        for (var i = 0; i < 32; i++)
+        {
+            var signature = _crypto.Sign(KeyType.Secp256k1, keyPair.PrivateKey, BitConverter.GetBytes(i));
+            var s = ReadScalar(signature.AsSpan(32));
+
+            s.Should().BeGreaterThan(BigInteger.Zero);
+            s.Should().BeLessThanOrEqualTo(Secp256k1Order / 2,
+                "secp256k1 signing must retain its canonical low-S output policy (iteration {0})", i);
+            _crypto.Verify(KeyType.Secp256k1, keyPair.PublicKey, BitConverter.GetBytes(i), ToHighS(signature))
+                .Should().BeTrue("every valid signature must verify through its high-S twin (iteration {0})", i);
+        }
+    }
+
+    [Fact]
+    public void Verify_Secp256k1_DeterministicCompactJunkNeverThrowsOrVerifies()
+    {
+        var keyPair = _keyGen.Generate(KeyType.Secp256k1);
+        var data = "normalization must not turn junk into a signature"u8.ToArray();
+        var random = new Random(23);
+
+        for (var i = 0; i < 256; i++)
+        {
+            var signature = new byte[64];
+            random.NextBytes(signature);
+            var verify = () => _crypto.Verify(KeyType.Secp256k1, keyPair.PublicKey, data, signature);
+
+            verify.Should().NotThrow();
+            verify().Should().BeFalse("deterministic junk sample {0} was not signed by the key", i);
+        }
+    }
+
+    // Documents why the "signature bytes are not a unique identifier" warning is written against
+    // ECDSA generally rather than secp256k1 alone: the NIST curves have always accepted the
+    // (R, n-S) twin, because neither FIPS 186-5 nor .NET's ECDsa imposes a low-S rule. Issue #23
+    // aligned secp256k1 with this behavior; it did not invent it.
+    [Theory]
+    [InlineData(KeyType.P256, "FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551")]
+    [InlineData(KeyType.P384, "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF581A0DB248B0A77AECEC196ACCC52973")]
+    [InlineData(KeyType.P521, "01FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFA51868783BF2F966B7FCC0148F709A5D03BB5C9B8899C47AEBB6FB71E91386409")]
+    public void Verify_NistEcdsa_AlreadyAcceptsNegatedS(KeyType keyType, string groupOrderHex)
+    {
+        var order = new BigInteger(Convert.FromHexString(groupOrderHex), isUnsigned: true, isBigEndian: true);
+        var keyPair = _keyGen.Generate(keyType);
+        var data = "ECDSA S-malleability is not specific to secp256k1"u8.ToArray();
+
+        var signature = _crypto.Sign(keyType, keyPair.PrivateKey, data, EcdsaSignatureFormat.IeeeP1363);
+        var scalarSize = signature.Length / 2;
+        var malleated = (byte[])signature.Clone();
+        WriteScalar(order - ReadScalar(signature.AsSpan(scalarSize)), malleated.AsSpan(scalarSize));
+
+        malleated.AsSpan(0, scalarSize).SequenceEqual(signature.AsSpan(0, scalarSize)).Should().BeTrue(
+            "negating S must leave R byte-identical");
+        malleated.Should().NotEqual(signature, "the malleated signature must be a different encoding");
+
+        _crypto.Verify(keyType, keyPair.PublicKey, data, signature, EcdsaSignatureFormat.IeeeP1363)
+            .Should().BeTrue();
+        _crypto.Verify(keyType, keyPair.PublicKey, data, malleated, EcdsaSignatureFormat.IeeeP1363)
+            .Should().BeTrue("{0} accepts the (R, n-S) twin independently of the issue #23 change", keyType);
+    }
+
+    private static byte[] ToHighS(byte[] lowSignature)
+    {
+        var highSignature = (byte[])lowSignature.Clone();
+        WriteScalar(Secp256k1Order - ReadScalar(lowSignature.AsSpan(32)), highSignature.AsSpan(32));
+        return highSignature;
+    }
+
+    private static byte[] CompactSignature(BigInteger r, BigInteger s)
+    {
+        var signature = new byte[64];
+        WriteScalar(r, signature.AsSpan(0, 32));
+        WriteScalar(s, signature.AsSpan(32, 32));
+        return signature;
+    }
+
+    private static BigInteger ReadScalar(ReadOnlySpan<byte> scalar)
+        => new(scalar, isUnsigned: true, isBigEndian: true);
+
+    private static void WriteScalar(BigInteger scalar, Span<byte> destination)
+    {
+        destination.Clear();
+        scalar.TryWriteBytes(destination, out var bytesWritten, isUnsigned: true, isBigEndian: true)
+            .Should().BeTrue();
+        if (bytesWritten < destination.Length)
+            destination[..bytesWritten].CopyTo(destination[(destination.Length - bytesWritten)..]);
+        destination[..(destination.Length - bytesWritten)].Clear();
     }
 
     [Fact]

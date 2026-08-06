@@ -227,3 +227,30 @@ it exposes. A wrapper that sends caller bytes to an arbitrary provider needs two
 must verify the original request after the provider returns: one private verification snapshot and
 one provider copy. Passing the verification snapshot itself is insufficient because a provider can
 recover and mutate the backing array of `ReadOnlyMemory<byte>`.
+
+## L10 — Issue work belongs on a branch from the first edit, not left uncommitted on `main`
+
+**Context:** Issue #23 was picked up by an earlier agent that implemented the fix, the tests, and
+all four documentation surfaces — then stopped without ever committing. The entire change sat as
+unstaged modifications on `main`: seven modified tracked files plus an untracked plan file. On
+resuming, the user's first correction was "put this work on its own branch." The work itself was
+sound and complete; the only thing wrong was where it lived. Uncommitted work on `main` is the
+worst of both worlds — it is invisible to `git log`, it is lost to any `git checkout`/`git stash`
+mistake, it cannot be pushed or reviewed, and it silently contaminates the next unrelated task
+that starts from what looks like a clean `main`.
+
+**Rule:** Create the feature branch **before the first edit** of any issue/feature task, not at
+commit time and never as a cleanup step. Branching is free and is the only cheap moment; the cost
+of not branching is paid entirely by whoever picks the work up next. Equally: an implementation is
+not "finished" at the last passing test — it is finished when it is committed on a named branch.
+Leaving verified work uncommitted throws away the verification, because the next agent cannot tell
+completed work from an abandoned half-edit without re-deriving all of it. See [[L4]].
+
+**How to apply:** At the start of any task tied to an issue, run
+`git checkout -b <type>/<slug>-issue-<n>` as the first tool call after reading the issue, matching
+the repo's existing naming (`feat/`, `fix/`, `docs/`). When *resuming* someone else's unfinished
+task, check `git status` and `git branch` first: if changes are sitting on `main`, move them onto a
+branch immediately (`git checkout -b <branch>` carries unstaged changes across) before adding
+anything of your own — do this without waiting to be asked. Then verify the inherited work
+independently rather than trusting its plan file's checkboxes: re-run the build and full suite, and
+prove any new regression test genuinely fails with the fix reverted.

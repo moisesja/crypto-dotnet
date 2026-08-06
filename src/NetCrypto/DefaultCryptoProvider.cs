@@ -460,6 +460,20 @@ public sealed class DefaultCryptoProvider : ICryptoProvider
         if (!SecpECDSASignature.TryCreateFromCompact(signature, out var sig))
             return false;
 
+        // NBitcoin follows libsecp256k1's Bitcoin-oriented verification policy and rejects
+        // otherwise-valid high-S ECDSA signatures. General secp256k1 consumers (notably ES256K,
+        // RFC 8812) do not impose that canonicality rule, so map the equivalent (r, n-s)
+        // representation to low-S before handing it to the backend.
+        //
+        // Normalization cannot widen the accept set beyond that one extra encoding:
+        // out-of-range scalars (>= n) are already rejected by TryCreateFromCompact, and for
+        // s in [1, n-1] the negation n-s stays in [1, n-1]. Zero scalars do NOT parse-fail
+        // (NBitcoin's compact parser only rejects overflow — see Secp256k1Recoverable) but
+        // Negate(0) == 0, so a zero S survives normalization unchanged and SigVerify still
+        // rejects it. TryNormalize's bool means "was high-S", not "succeeded".
+        if (sig.TryNormalize(out var normalized))
+            sig = normalized;
+
         Span<byte> hash = stackalloc byte[32];
         SHA256.HashData(data, hash);
 

@@ -23,6 +23,16 @@ namespace NetCrypto;
 /// <see cref="System.MemoryExtensions.SequenceEqual{T}(System.ReadOnlySpan{T}, System.ReadOnlySpan{T})"/>
 /// (and <see cref="RecoveryId"/>), or key on an encoded form of the bytes.
 /// </para>
+/// <para>
+/// <b>Content comparison is still not a replay defense for signatures from elsewhere.</b>
+/// <see cref="Secp256k1Recoverable.Sign"/> always emits low-S, so signatures this library
+/// produces are canonical — but ECDSA admits two valid encodings of every signature
+/// (<c>(R, S)</c> and <c>(R, n-S)</c>), and
+/// <see cref="ICryptoProvider.Verify(KeyType, System.ReadOnlySpan{byte}, System.ReadOnlySpan{byte}, System.ReadOnlySpan{byte})"/>
+/// accepts both for every ECDSA key type. A replay cache keyed on inbound signature bytes is defeated by
+/// re-submitting the twin encoding. Bind replay protection to the message — a nonce, <c>jti</c>,
+/// or the digest — and enforce <c>S ≤ n/2</c> explicitly if you need canonicality.
+/// </para>
 /// </remarks>
 /// <param name="Signature64">The 64-byte compact signature (<c>R‖S</c>, each 32 bytes
 /// big-endian), low-S normalized (<c>S ≤ n/2</c>).</param>

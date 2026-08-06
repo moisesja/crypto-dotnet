@@ -5,6 +5,30 @@ All notable changes to **NetCrypto** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **RFC 8812 ES256K high-S interoperability:** `DefaultCryptoProvider.Verify` now accepts a
+  mathematically valid high-S secp256k1 signature by normalizing it to the equivalent low-S form
+  before the NBitcoin verification call. Signing remains deterministic and low-S; malformed or
+  out-of-range compact scalars still return `false`. This removes an inherited Bitcoin/BIP-62
+  policy from the general-purpose verification path — neither RFC 8812 nor FIPS 186-5 requires
+  low-S — and brings secp256k1 in line with how the NIST curves in this provider have always
+  behaved. Protocols requiring low-S canonicality must enforce `S ≤ n/2` themselves;
+  `KeyStoreSigner`'s recoverable-output guard and `Secp256k1Recoverable` are unchanged. (#23)
+
+### Documentation
+
+- **ECDSA signature non-uniqueness is now stated on the API surface.** `ICryptoProvider.Verify`,
+  the README, `RecoverableSignature`, and the signing sample now record that `(R, S)` and
+  `(R, n-S)` are both valid for *every* ECDSA key type here — P-256/384/521 included, where this
+  was already true and undocumented — and that replay caches, dedup sets, and idempotency checks
+  must therefore key on the message (nonce/`jti`/digest) rather than on signature bytes. Issue #23
+  asked that whichever way the policy landed be documented; the caveat is deliberately written
+  against ECDSA in general rather than secp256k1 alone, since scoping it to one curve is what made
+  the property undiscoverable in the first place.
+
 ## [1.4.0] - 2026-07-26
 
 ### Added
@@ -214,7 +238,7 @@ library stack behind stable interfaces, so no domain library binds directly to a
 - **Key model:** `KeyType` (Ed25519, X25519, P-256/384/521, secp256k1, BLS12-381 G1/G2), `KeyPair`,
   `PublicKeyReference`, and multibase/multicodec encoding (`MultibasePublicKey`) via NetCid.
 - **Signing & verification** (`ICryptoProvider` / `DefaultCryptoProvider`): EdDSA (Ed25519), ECDSA
-  on the NIST curves (DER and IEEE P1363), secp256k1 (64-byte compact, low-S), and BLS12-381
+  on the NIST curves (DER and IEEE P1363), secp256k1 (64-byte compact, low-S signing), and BLS12-381
   (G1/G2 variants, hash-to-curve).
 - **Recoverable secp256k1 ECDSA** (`Secp256k1Recoverable`) over a caller-supplied 32-byte digest,
   returning the raw recovery id (no EVM `v`-encoding).

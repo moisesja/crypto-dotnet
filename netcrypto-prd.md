@@ -115,13 +115,14 @@ Migrate `ICryptoProvider` (both `Sign`/`Verify` overload pairs, `KeyAgreement`, 
 
 ### FR-3 — `DefaultCryptoProvider`
 
-Migrate verbatim, including: Ed25519 (NSec, 32-byte seed private keys), NIST ECDSA P-256/384/521 with DER↔IEEE-P1363 handling (`DSASignatureFormat` mapping), secp256k1 (SHA-256 prehash, 64-byte compact R‖S), BLS12-381 G1/G2 with the existing DSTs (`BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_` and G1 counterpart), X25519 `KeyAgreement` (HKDF-SHA256 wrapper) and `DeriveSharedSecret` (X25519 and **all three** NIST curves P-256/P-384/P-521 — per the source switch in `DefaultCryptoProvider.DeriveSharedSecret`; P-521 is in active use by didcomm-dotnet's ECDH paths), SEC1 point validation/decompression (`EcPointValidator`, BigInteger curve constants).
+Migrate verbatim, including: Ed25519 (NSec, 32-byte seed private keys), NIST ECDSA P-256/384/521 with DER↔IEEE-P1363 handling (`DSASignatureFormat` mapping), secp256k1 (SHA-256 prehash, 64-byte compact R‖S), BLS12-381 G1/G2 with the existing DSTs (`BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_` and G1 counterpart), X25519 `KeyAgreement` (HKDF-SHA256 wrapper) and `DeriveSharedSecret` (X25519 and **all three** NIST curves P-256/P-384/P-521 — per the source switch in `DefaultCryptoProvider.DeriveSharedSecret`; P-521 is in active use by didcomm-dotnet's ECDH paths), SEC1 point validation/decompression (`EcPointValidator`, BigInteger curve constants). For secp256k1, signing remains deterministic and low-S; general verification normalizes a valid high-S signature to its low-S equivalent before the Bitcoin-oriented backend check so RFC 8812 ES256K signatures interoperate (issue #23). Canonicality-sensitive Bitcoin/EVM callers must enforce low-S at their own protocol boundary.
 
 **Acceptance criteria:**
 - [ ] All net-did tests under `tests/NetDid.Core.Tests/Crypto/` covering this class migrate (namespaces re-pointed only) and pass unmodified in assertion content.
 - [ ] Cross-format test: P-256 signature produced as DER verifies as DER and fails (returns `false`, no throw) when verified as IeeeP1363, and vice versa.
 - [ ] Two-party agreement test per ECDH-capable type (X25519, P-256, P-384, P-521): independently generated pairs derive byte-identical shared secrets from both sides; a non-ECDH key type (e.g. Ed25519) throws `ArgumentException`.
 - [ ] Ed25519 sign/verify validated against RFC 8032 §7.1 test vectors (TEST 1–3 minimum: secret key, public key, message, expected signature).
+- [ ] secp256k1 signing emits low-S; verification accepts both a valid low-S compact signature and its high-S `(R, n-S)` equivalent through both overloads. Zero/out-of-range scalars, malformed lengths, wrong data, and wrong keys still return `false` without leaking backend exceptions (issue #23).
 - [ ] No type from NSec/NBitcoin/Nethermind appears in any public signature (NFR-1).
 
 ### FR-4 — KDFs
