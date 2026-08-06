@@ -5,7 +5,7 @@ All notable changes to **NetCrypto** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.5.0] - 2026-08-05
 
 ### Fixed
 
@@ -22,12 +22,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **ECDSA signature non-uniqueness is now stated on the API surface.** `ICryptoProvider.Verify`,
   the README, `RecoverableSignature`, and the signing sample now record that `(R, S)` and
-  `(R, n-S)` are both valid for *every* ECDSA key type here — P-256/384/521 included, where this
+  `(R, n-S)` are both valid for _every_ ECDSA key type here — P-256/384/521 included, where this
   was already true and undocumented — and that replay caches, dedup sets, and idempotency checks
   must therefore key on the message (nonce/`jti`/digest) rather than on signature bytes. Issue #23
   asked that whichever way the policy landed be documented; the caveat is deliberately written
   against ECDSA in general rather than secp256k1 alone, since scoping it to one curve is what made
   the property undiscoverable in the first place.
+
+### Internal
+
+- **Public API baseline promoted.** `PublicAPI.Shipped.txt` had not been updated since GA 1.0.0,
+  so every API added in 1.1.0, 1.2.0, 1.3.0 and 1.4.0 — `Base64Url`, the AEAD size constants,
+  `IKeyStore.DeriveSharedSecretAsync`, `IRecoverableDigestSigner`, `RecoverableSignature`,
+  `KeyPair.WithPrivateKey`, the `IDisposable` members, `KeyTypeExtensions.ToUncompressed` — was
+  still recorded as _unshipped_ despite being published to NuGet. All 35 entries are now in the
+  shipped baseline and `PublicAPI.Unshipped.txt` is empty again, restoring the analyzer's ability
+  to distinguish frozen surface from surface added since the last release. No public API changed.
 
 ## [1.4.0] - 2026-07-26
 
@@ -70,7 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejected before the provider is called. This closes review findings covering malformed and
   high-S provider results, mutable provider/caller buffers, and alias rebinding (delete + recreate
   a key under the same alias) letting an old signer emit a signature that recovers to a
-  *different* key than it advertises. (#21)
+  _different_ key than it advertises. (#21)
 - **The `IKeyStore.SignDigestAsync` default implementation now validates the digest length** (bad
   length → parameter-named `ArgumentException("digest32")`) before signalling `NotSupportedException`,
   so the "parameter-named `ArgumentException` at every entry point" contract holds for stores that
@@ -261,6 +271,12 @@ library stack behind stable interfaces, so no domain library binds directly to a
 - **Native BBS distribution** for five RIDs (`osx-arm64`, `osx-x64`, `linux-x64`, `linux-arm64`,
   `win-x64`), packed into the single NuGet package; the repository stays source-only.
 
+[Unreleased]: https://github.com/moisesja/crypto-dotnet/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.0.0-preview.2...v1.0.0
 [1.0.0-preview.2]: https://github.com/moisesja/crypto-dotnet/compare/v1.0.0-preview.1...v1.0.0-preview.2
 [1.0.0-preview.1]: https://github.com/moisesja/crypto-dotnet/releases/tag/v1.0.0-preview.1

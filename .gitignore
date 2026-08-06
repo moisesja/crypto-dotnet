@@ -12,4 +12,9 @@ native/zkryptium-ffi/target/
 
 # OS noise
 .DS_Store
+
+# Agent harness: skills are shared (checked in); machine-local settings and
+# scratch worktrees are not.
 .claude/settings.json
+.claude/settings.local.json
+.claude/worktrees/
