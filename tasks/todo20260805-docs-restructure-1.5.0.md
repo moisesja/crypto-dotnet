@@ -73,4 +73,72 @@ and only the narrative *why* in `tasks/lessons.md`. Clean the `zcap-dotnet` cont
 
 ## Review
 
-See the Review section at the end of this file (filled in on completion).
+### What moved where
+
+| Lesson | Promoted to | Was it already there? |
+|---|---|---|
+| L1, L5 | NFR-3 (allow-list ban) | **Yes** — promoted earlier, lesson never trimmed |
+| L6 | FR-16b AC (strict base64url) | **Yes** — same |
+| L9 | FR-12b (boundary verification) | **Yes** — same, but scoped to `KeyStoreSigner` only |
+| L3 | NFR-3 — three input families, widened forbidden-leak list | No |
+| L5 | NFR-3 AC — all three OS legs | No |
+| L9 | **NFR-6** — Trust-boundary integrity (generalized) | No |
+| L2 | FR-5 AC — upper-bound proof sizing, large-end regression | No |
+| L7 + L8 | AGENTS.md Task Management §2 — one plan-gate rule, both directions | No |
+| L10 | AGENTS.md Task Management §0 — branch first, resume protocol | No |
+| L4, L6, L9 | AGENTS.md §4 + `adversarial-pass` skill | Partially — §2 had one vague bullet |
+
+The three "already there" rows are the reason for this task: a promoted rule left duplicated in
+`lessons.md` is a rule with two copies free to drift. Each is now stated once and cited.
+
+`lessons.md`: **19,530 → 9,977 bytes** (−49%). Zero `**Rule:**` / `**How to apply:**` blocks
+remain (they were the duplicated normative text); all 10 lessons keep their narrative and carry a
+`→ Rule:` citation to wherever the rule now lives.
+
+### zcap-dotnet cleanup
+
+`AGENTS.md §2a`'s "high-value workflows **in this repo**" listed chain validation, caveat
+inheritance, attenuation, replay/nonce, revocation, `tests/Compliance/`, and Core / AspNetCore
+projects — none of which exist in `crypto-dotnet`. Replaced with this library's real dimensions.
+The opt-in policy and the `pipeline()`-over-barriers guidance were correct and repo-agnostic, so
+they stayed. A grep for the zcap vocabulary across `AGENTS.md`, the PRD, `lessons.md` and the
+skills now returns only one hit — "Porting caveats for agents" in PRD §1.4, ordinary English.
+
+### Unplanned finding — the API baseline had been stale for four releases
+
+Not in the original analysis; surfaced while checking release state. `PublicAPI.Shipped.txt` had
+not been modified since `0b69535` (GA 1.0.0). All 35 API entries added across 1.1.0, 1.2.0, 1.3.0
+and 1.4.0 were still in `PublicAPI.Unshipped.txt` despite having been published to NuGet, and
+`README.md` asserted Unshipped was empty. Promoted all 35 (ordinal sort, matching the file's
+existing order — verified before merging), and added a per-release hygiene note to PRD §8 so the
+promotion is part of the release definition rather than something to rediscover.
+
+Second unplanned finding: `.gitignore` covered `.claude/settings.json` but not
+`settings.local.json` or `worktrees/`, so both were untracked-but-committable. Now ignored; the
+three skills are checked in.
+
+### Verification performed
+
+| Check | Command | Result |
+|---|---|---|
+| Release build | `dotnet build -c Release -m:1` | succeeded, **0 warnings, 0 errors** |
+| Full suite (CI filter) | `dotnet test --no-build -c Release --filter "Category!=BbsAbsent"` | **964 passed, 0 failed** — matches the #23 baseline |
+| API surface | `dotnet run --project tools/ApiCoverageCheck -- samples` | passed; no public API or dependency change |
+| Whitespace | `git diff --check` | clean |
+| Duplication | grep for restated rules in `lessons.md` | 0 remaining, 10 citations present |
+
+The Release build was the real gate for the baseline promotion: a mistyped or misordered entry
+would have fired RS0016 ("symbol not part of the declared API") or RS0017 ("declared but not
+present"). Zero warnings means the analyzer accepts all 203 entries against the actual surface.
+
+### Commits
+
+- `f877d57` — docs: promote lessons to AGENTS.md/PRD, add skills, fix zcap-dotnet content
+- `7c85e2b` — chore: prepare 1.5.0 (API baseline, version, changelog)
+
+### Deliberately not done
+
+Creating and pushing the annotated `v1.5.0` tag. That fires `release.yml` → pack → 5-RID smoke →
+GitHub release → **NuGet publish**, which is irreversible and outward-facing; the user chose
+prep-only. The tree is ready for it: version bumped, CHANGELOG dated, baseline promoted, suite
+green.
