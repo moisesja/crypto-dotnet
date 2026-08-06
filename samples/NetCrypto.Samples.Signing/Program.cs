@@ -28,7 +28,7 @@ KeyType[] signingKeyTypes =
     KeyType.P256,       // ECDSA over NIST P-256 (JOSE "ES256")
     KeyType.P384,       // ECDSA over NIST P-384 (JOSE "ES384")
     KeyType.P521,       // ECDSA over NIST P-521 (JOSE "ES512")
-    KeyType.Secp256k1,  // ECDSA over secp256k1 — always 64-byte compact R‖S
+    KeyType.Secp256k1,  // ECDSA over secp256k1 — 64-byte compact R‖S; signing is low-S
     KeyType.Bls12381G1, // BLS — public key in G1 (48 B), signature in G2 (96 B)
     KeyType.Bls12381G2, // BLS — public key in G2 (96 B), signature in G1 (48 B)
 ];
@@ -53,6 +53,13 @@ foreach (var keyType in signingKeyTypes)
     Check(!tampered, $"{keyType} rejects tampered data");
 }
 Console.WriteLine();
+
+// ECDSA signatures are not unique per message. For EVERY ECDSA key type above — P-256/384/521
+// and secp256k1 — (R, S) and (R, n-S) are both valid over the same key and message, and Verify
+// accepts both. So never key a replay cache or dedup set on signature bytes; bind replay
+// protection to the message (nonce/jti/digest) instead. secp256k1 signing still emits low-S,
+// and only verification is permissive, for RFC 8812 ES256K interop (issue #23). Bitcoin/EVM
+// protocols that require BIP-62/EIP-2 canonicality must enforce S <= n/2 themselves.
 
 // -------------------------------------------------------
 // 2. EcdsaSignatureFormat — the SAME P-256 key, two wire formats

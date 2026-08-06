@@ -21,6 +21,23 @@ public interface ICryptoProvider
     /// key types). Use the <see cref="Verify(KeyType, ReadOnlySpan{byte}, ReadOnlySpan{byte}, ReadOnlySpan{byte}, EcdsaSignatureFormat)"/>
     /// overload to verify IEEE P1363 signatures.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>ECDSA signatures are not unique per message.</b> For every ECDSA key type here
+    /// (P-256/384/521 and secp256k1), both <c>(R, S)</c> and <c>(R, n-S)</c> are valid signatures
+    /// over the same key and message, and this method accepts both. Never treat accepted signature
+    /// bytes as a unique identifier: keying a replay cache, deduplication set, or idempotency
+    /// check on them is defeated by re-submitting the other encoding. Bind replay protection to
+    /// the message (a nonce, JTI, or digest), not to the signature.
+    /// </para>
+    /// <para>
+    /// secp256k1 uses fixed-width 64-byte compact <c>R‖S</c> and signing emits low-S, but
+    /// verification accepts high-S too, for RFC 8812 ES256K interoperability (issue #23). Neither
+    /// RFC 8812 nor FIPS 186-5 imposes a low-S rule; it is a Bitcoin/BIP-62 convention. Protocols
+    /// that genuinely require BIP-62/EIP-2 canonical signatures must enforce <c>S ≤ n/2</c>
+    /// themselves at their own boundary — as <c>KeyStoreSigner</c> does for recoverable output.
+    /// </para>
+    /// </remarks>
     bool Verify(KeyType keyType, ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> data, ReadOnlySpan<byte> signature);
 
     /// <summary>
@@ -36,6 +53,13 @@ public interface ICryptoProvider
     /// with <see cref="EcdsaSignatureFormat.IeeeP1363"/> (or vice versa) returns
     /// <c>false</c> — not an exception. Non-ECDSA key types ignore <paramref name="format"/>.
     /// </summary>
+    /// <remarks>
+    /// For secp256k1, <paramref name="format"/> is ignored and the signature is always fixed-width
+    /// compact <c>R‖S</c>. As with the other overload, every ECDSA key type accepts both
+    /// <c>(R, S)</c> and <c>(R, n-S)</c> over the same key and message — see
+    /// <see cref="Verify(KeyType, ReadOnlySpan{byte}, ReadOnlySpan{byte}, ReadOnlySpan{byte})"/>
+    /// for what that means for replay caches and canonicality-sensitive protocols.
+    /// </remarks>
     bool Verify(KeyType keyType, ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> data, ReadOnlySpan<byte> signature, EcdsaSignatureFormat format);
 
     /// <summary>
