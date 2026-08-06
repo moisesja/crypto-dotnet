@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-05
+
 ### Fixed
 
 - **RFC 8812 ES256K high-S interoperability:** `DefaultCryptoProvider.Verify` now accepts a
@@ -28,6 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asked that whichever way the policy landed be documented; the caveat is deliberately written
   against ECDSA in general rather than secp256k1 alone, since scoping it to one curve is what made
   the property undiscoverable in the first place.
+
+### Internal
+
+- **Public API baseline promoted.** `PublicAPI.Shipped.txt` had not been updated since GA 1.0.0,
+  so every API added in 1.1.0, 1.2.0, 1.3.0 and 1.4.0 — `Base64Url`, the AEAD size constants,
+  `IKeyStore.DeriveSharedSecretAsync`, `IRecoverableDigestSigner`, `RecoverableSignature`,
+  `KeyPair.WithPrivateKey`, the `IDisposable` members, `KeyTypeExtensions.ToUncompressed` — was
+  still recorded as *unshipped* despite being published to NuGet. All 35 entries are now in the
+  shipped baseline and `PublicAPI.Unshipped.txt` is empty again, restoring the analyzer's ability
+  to distinguish frozen surface from surface added since the last release. No public API changed.
 
 ## [1.4.0] - 2026-07-26
 
@@ -261,6 +273,12 @@ library stack behind stable interfaces, so no domain library binds directly to a
 - **Native BBS distribution** for five RIDs (`osx-arm64`, `osx-x64`, `linux-x64`, `linux-arm64`,
   `win-x64`), packed into the single NuGet package; the repository stays source-only.
 
+[Unreleased]: https://github.com/moisesja/crypto-dotnet/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.0.0-preview.2...v1.0.0
 [1.0.0-preview.2]: https://github.com/moisesja/crypto-dotnet/compare/v1.0.0-preview.1...v1.0.0-preview.2
 [1.0.0-preview.1]: https://github.com/moisesja/crypto-dotnet/releases/tag/v1.0.0-preview.1

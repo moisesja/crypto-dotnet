@@ -13,11 +13,12 @@ stable interfaces, so that no domain library (`net-did`, `dataproofs-dotnet`,
 dotnet add package NetCrypto
 ```
 
-> **Stable release.** NetCrypto is published as a stable **`1.0.0`** (GA) — no `--prerelease`
-> flag is required. The public API is frozen: `PublicAPI.Shipped.txt` is the authoritative
-> contract and `PublicAPI.Unshipped.txt` is empty. Semantic versioning applies — additive
-> changes bump the minor version, breaking changes the major; any pre-GA `1.0.0-preview.*`
-> packages are superseded by `1.0.0`. See [CHANGELOG.md](CHANGELOG.md) for the release history.
+> **Stable release.** NetCrypto has been generally available since `1.0.0` and ships as a stable
+> package — no `--prerelease` flag is required. `PublicAPI.Shipped.txt` is the authoritative
+> contract for every published API; `PublicAPI.Unshipped.txt` holds only surface added since the
+> last release and is empty on a tagged release. Semantic versioning applies — additive changes
+> bump the minor version, breaking changes the major; any pre-GA `1.0.0-preview.*` packages are
+> superseded. See [CHANGELOG.md](CHANGELOG.md) for the release history and the current version.
 
 Target framework: **net10.0**. Depends on [`NetCid`](https://www.nuget.org/packages/NetCid)
 for multibase/multicodec encoding.
