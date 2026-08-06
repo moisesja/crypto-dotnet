@@ -148,6 +148,8 @@ Migrate `IBbsCryptoProvider`, `DefaultBbsCryptoProvider`, `ZkryptiumNative` (int
 - [ ] BBS round-trip test passes on a platform with the native library: keygen → sign(3 messages) → verify(true) → DeriveProof(reveal indices {0,2}) → VerifyProof(true); tamper any revealed message → VerifyProof(false).
 - [ ] Keygen fixture test: deterministic IKM from draft-irtf-cfrg-bbs-signatures-10 BLS12-381-SHA-256 test fixtures produces the fixture's expected SK/PK through the FFI (proves the wrapped zkryptium build matches draft-10; cite the fixture used in the test).
 - [ ] Size invariants asserted: SK 32, PK 96, signature 80 bytes.
+- [ ] **Proof buffer sizing.** `DeriveProof` sizes its managed output buffer from an **upper bound derived from the total message count**, not a hand-derived formula, and takes the true length from the FFI's written-back `proof_out_len`. A formula transcribed from a comment is not acceptable: the BLS12-381-SHA-256 proof is `272 + 32·undisclosed`, and an earlier `144 + 32·(undisclosed+1)` under a 512-byte floor stayed green for small reveals while throwing `CryptographicException` at ≥8 undisclosed messages. Sizing off an upper bound is also robust to spec and library drift.
+- [ ] **Large-end regression.** A test at the *large* end of the parameter space — ≥10 messages revealing 1 — proves the buffer holds. Happy-path small cases (3 messages, reveal 2) cannot detect a shortfall masked by a floor.
 - [ ] With the native library absent (test by running the managed test assembly with no `runtimes/` payload — CI job, FR-22): `IsAvailable == false`; each of the five operations throws `BbsUnavailableException` with non-null `InnerException`; every non-BBS test in the suite still passes.
 - [ ] `new DefaultBbsCryptoProvider((BbsCiphersuite)1)` throws `NotSupportedException`.
 - [ ] Header binding (issue #2): `Sign(sk, msgs, header)` + `Verify(pk, sig, msgs, header)` round-trips for a non-empty header, and `Verify` returns `false` for a different header or the default empty header; `DeriveProof(..., presentationHeader, header)` + `VerifyProof(..., presentationHeader, header)` round-trips, and `VerifyProof` returns `false` when the `header` differs from the one bound at derive time (the header is committed by the proof); the `presentationHeader` and `header` are independently committed. The default empty-header behavior is unchanged for callers that omit it.
@@ -519,13 +521,42 @@ No type from `NSec.*`, `NBitcoin.*`, `Nethermind.*`, or `NetCrypto.Native` in an
 Any JSON handling uses `System.Text.Json` (or `Microsoft.IdentityModel.Tokens` 8.x). **AC:** dependency-graph check from AC-1.
 
 ### NFR-3 — Input validation
-Every public method validates lengths/nulls and throws `ArgumentException`/`ArgumentNullException` with the parameter name before any crypto operation. **AC:** per-primitive negative tests exist (each FR above includes them); no public method can be made to throw `IndexOutOfRangeException`/`NullReferenceException` from bad input (fuzz-lite test: null/empty/oversized inputs across the surface). A wrong-length raw key/scalar handed to a backend (NSec, Nethermind BLS, platform EC import) must surface as a **parameter-named `ArgumentException`**, never a leaked backend type (`System.FormatException`, `Nethermind.Crypto.Bls+BlsException`, or a platform `CryptographicException`); the fuzz-lite suite carries **no** "known deviation" allow-list, and any non-contract exception fails it rather than being pinned.
+Every public method validates lengths/nulls and throws `ArgumentException`/`ArgumentNullException` with the parameter name before any crypto operation. A wrong-length raw key/scalar handed to a backend (NSec, Nethermind BLS, platform EC import) must surface as a **parameter-named `ArgumentException`**, never a leaked backend type; the fuzz-lite suite carries **no** "known deviation" allow-list, and any non-contract exception fails it rather than being pinned.
+
+**Negative coverage spans three input families**, not one. Every public method that parses caller bytes carries at least one test from each applicable family:
+
+- **(a) Absent** — null, empty.
+- **(b) Wrong-shape** — wrong length, oversized, non-multiple-of-block.
+- **(c) Structurally-valid-but-semantically-wrong** — a structurally valid base64 string that is not valid base64url; an off-curve point that still parses; a coordinate that is on-curve by value but left-zero-trimmed in length; a high-S signature; an index past the message count; an oversized length *parameter*. **This is where the defects hide**, because (a) and (b) usually fail fast in obvious ways. All-zero buffers are a specific blind spot: for P-256, `x = 0` decompresses to a *valid* point, so a zero-filled "bad key" silently takes the happy path.
+
+**Forbidden leaked exception types** from any public method on any input: `IndexOutOfRangeException`, `NullReferenceException`, `System.FormatException`, `OverflowException`, `KeyNotFoundException` (where not the documented contract), and any backend or platform type (`Nethermind.Crypto.Bls+BlsException`, a platform `CryptographicException` from EC import). All must become `ArgumentException`/`ArgumentNullException` with the parameter name — or a documented `false` for verify-style methods. `CryptographicException` is reserved for genuine crypto failures and must **not** double as the catch-all for malformed input.
+
+**Acceptance criteria:**
+- [ ] Per-primitive negative tests exist (each FR above includes them).
+- [ ] A shared fuzz-lite test drives all three families across the public surface — including non-zero random and "valid-encoding-of-invalid-value" buffers, not only nulls and zeros — with no allow-list.
+- [ ] Assertions pin the parameter (`WithParameterName(...)`), not merely "threw something in a set". A broad pass condition certifies far less than it appears.
+- [ ] The suite runs on **all three OS legs** of FR-20. Backend failure types are platform-specific (the macOS EC import exception differs from Windows and Linux), so "in contract on one platform" is not acceptance.
 
 ### NFR-4 — Determinism and thread safety
 All `Default*` providers and static classes are stateless/thread-safe. **AC:** a parallel test (≥ 8 threads × 100 ops on one shared provider instance, mixed key types) completes without error and with valid outputs.
 
 ### NFR-5 — XML documentation
 `GenerateDocumentationFile=true`; CS1591 (missing XML doc) treated as error. **AC:** build passes with that setting.
+
+### NFR-6 — Trust-boundary integrity
+
+Applies to every type that **delegates across a trust boundary** — an `IKeyStore`, an HSM or cloud KMS, an injected `ICryptoProvider`, the native FFI — and especially to one that caches metadata about the delegated-to entity behind a long-lived handle. FR-12b specifies this concretely for `KeyStoreSigner`; the requirement is general, and any new delegating type inherits it.
+
+Validating *input* certifies input handling, not boundary integrity. A delegating type must additionally:
+
+1. **Validate backend output as strictly as backend input.** A backend may return a structurally invalid or wrong-but-well-formed result for a perfectly valid request. Check shape, length, and range on the return path before handing the value to the caller — a non-nullable, contractually-sized API must not become a passthrough for whatever the provider produced.
+2. **Assert advertised identity matches produced output.** For any type that both advertises an identity and produces identity-bearing output (a recoverable signature literally encodes its signer), recover the identity from the output and compare it to the advertised one before returning; mismatch is a `CryptographicException`. This is what makes **state mutation under a live handle** — deleting an alias and recreating it with a different key — detectable rather than silent identity confusion.
+3. **Hold defensive copies in both directions.** A wrapper that caches identity bytes clones its constructor input and keeps that snapshot separate from any memory it exposes. A wrapper that must verify the original request after the backend returns needs *two* copies — a private verification snapshot and a separate copy handed to the backend — because a backend can recover and mutate the backing array of a `ReadOnlyMemory<byte>` it was given.
+
+**Acceptance criteria:**
+- [ ] For each delegating type, a test-double backend proves: a malformed result for a valid input is rejected; a wrong-but-well-formed result (correct shape, different key) is rejected; a well-behaved backend's output still round-trips.
+- [ ] Backing-state mutation under a live handle (delete + recreate the entity under the same alias) makes the stale handle throw rather than emit output attributable to a different identity.
+- [ ] Neither a backend retaining its returned buffer nor one mutating a buffer it was handed can change what the caller observes — asserted by a double that writes to both after returning.
 
 ---
 
@@ -580,9 +611,11 @@ CBOR APIs; Data Integrity / `eddsa-jcs-2022` proof engine; JCS canonicalizer; JO
 |---|---|---|
 | A — Scaffold + migration | §1, FR-1…FR-9 | All Phase-A ACs + NFR suite green on host platform |
 | B — New primitives + examples | FR-10…FR-17 | All spec-vector tests green; all ten samples run to exit 0; API coverage script passes |
-| C — CI + packaging | FR-20…FR-22, NFR-1 analyzer wiring | Dry-run release produces verified 5-RID package; samples executed in all CI legs |
+| C — CI + packaging | FR-20…FR-22, NFR-1 analyzer wiring | Dry-run release produces verified 5-RID package; samples executed in all CI legs; NFR-3 suite green on **all three** OS legs |
 
 Definition of done = every checkbox in this document checked, plus: README written with the algorithm/spec conformance table (mirroring concept §2, marking BBS as draft-10-pinned) and linking to `samples/README.md` as the primary usage documentation, `PublicAPI.Shipped.txt` reviewed by the maintainer, and the concept-to-FR traceability table verified (every row implemented; no unmapped capability).
+
+**Per-release hygiene.** Every tagged release additionally: promotes `PublicAPI.Unshipped.txt` into `PublicAPI.Shipped.txt` (an API published to NuGet is by definition shipped — leaving it "unshipped" erases the baseline's ability to distinguish frozen surface from surface added since the last release), bumps `NetCryptoVersion` in `Directory.Build.props`, and closes the CHANGELOG's `[Unreleased]` section into a dated version heading with its compare link.
 
 ---
 
@@ -605,6 +638,7 @@ Normative completeness check for concept §8 package-level criterion 6 ("surface
 | §5 | Ciphersuite parameterization; Posture-1 swap seam; API hygiene | architecture decisions 6, 10 | FR-5, FR-9, NFR-1 |
 | §6 | 5-RID native distribution; BBS-absent supported mode | concept decisions 7, 8 | FR-20, FR-21, FR-22, FR-5 |
 | §2 (cross-cutting) | Developer examples for the entire public surface | maintainer requirement | FR-17 |
+| §2.6 (cross-cutting) | HSM-first delegation — a private key that never leaves its store | all key-store consumers | FR-7, FR-12b, **NFR-6** |
 
 ## Appendix — Test-vector source index
 
