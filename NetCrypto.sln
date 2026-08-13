@@ -37,6 +37,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{07C2787E
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ApiCoverageCheck", "tools\ApiCoverageCheck\ApiCoverageCheck.csproj", "{334FBC80-0913-4648-8498-43C690B4032A}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NetCrypto.Samples.CapableKeyStore", "samples\NetCrypto.Samples.CapableKeyStore\NetCrypto.Samples.CapableKeyStore.csproj", "{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -203,6 +205,18 @@ Global
 		{334FBC80-0913-4648-8498-43C690B4032A}.Release|x64.Build.0 = Release|Any CPU
 		{334FBC80-0913-4648-8498-43C690B4032A}.Release|x86.ActiveCfg = Release|Any CPU
 		{334FBC80-0913-4648-8498-43C690B4032A}.Release|x86.Build.0 = Release|Any CPU
+		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}.Debug|x64.Build.0 = Debug|Any CPU
+		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}.Debug|x86.Build.0 = Debug|Any CPU
+		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}.Release|x64.ActiveCfg = Release|Any CPU
+		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}.Release|x64.Build.0 = Release|Any CPU
+		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}.Release|x86.ActiveCfg = Release|Any CPU
+		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -221,5 +235,6 @@ Global
 		{925D2234-2317-4084-877D-68F875EA52C2} = {5D20AA90-6969-D8BD-9DCD-8634F4692FDA}
 		{B78FD929-99EC-4025-92EB-76EEF519D2FC} = {5D20AA90-6969-D8BD-9DCD-8634F4692FDA}
 		{334FBC80-0913-4648-8498-43C690B4032A} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
+		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE} = {5D20AA90-6969-D8BD-9DCD-8634F4692FDA}
 	EndGlobalSection
 EndGlobal

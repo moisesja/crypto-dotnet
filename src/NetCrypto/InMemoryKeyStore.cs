@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 
 namespace NetCrypto;
 
@@ -157,6 +158,16 @@ public sealed class InMemoryKeyStore : IKeyStore, IDisposable
             // it under THIS method's parameter so the caller sees the argument it actually passed; the
             // provider's detailed message is preserved on the inner exception. (A non-ECDH stored key
             // throws with ParamName "keyType" and is intentionally left to propagate unchanged.)
+            throw new ArgumentException(
+                "The peer public key is invalid for the stored key's algorithm.", nameof(peerPublicKey), ex);
+        }
+        catch (CryptographicException ex)
+        {
+            // A peer point that is the right length but unusable — off-curve, low-order, or with
+            // no solution on the curve — reaches the platform/NSec backend and comes back as a
+            // CryptographicException. NFR-3 reserves that type for genuine crypto failures and
+            // forbids it doubling as the catch-all for malformed input, so it is re-surfaced as
+            // the parameter-named ArgumentException this method's contract already promises.
             throw new ArgumentException(
                 "The peer public key is invalid for the stored key's algorithm.", nameof(peerPublicKey), ex);
         }

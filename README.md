@@ -48,10 +48,79 @@ services.AddNetCrypto(); // TryAdd: your own ICryptoProvider/IBbsCryptoProvider/
 
 ## Learning the API: samples
 
-The **primary usage documentation** is [`samples/README.md`](samples/README.md) — ten
+The **primary usage documentation** is [`samples/README.md`](samples/README.md) — eleven
 standalone, runnable console programs covering 100% of the public API surface
 (enforced in CI by `tools/ApiCoverageCheck`). Start with `NetCrypto.Samples.Keys` and
 follow the reading order in the samples index.
+
+## Implementing a capable key store
+
+`IKeyStore` says "sign with the key behind this alias". That is enough for an in-memory store
+and not enough for a custody backend — a cloud KMS, an HSM partition, an encrypted software
+keystore — where the consumer additionally needs to know what the backend can do *before* first
+use, which tenant it may touch, which **key instance** an alias currently holds, how to retry a
+mutation that may or may not have been applied, and which encoding a signature comes back in.
+
+`ICapableKeyStore : IKeyStore, IKeyStoreCapabilityProvider` (1.6.0) is that contract. It is
+purely additive: `IKeyStore` gains no member, so every existing store, `ISigner`,
+`KeyStoreSigner`, and `InMemoryKeyStore` caller is source- and binary-compatible. It adds no
+export operation anywhere, no KDF, and no protocol semantics.
+`CapableInMemoryKeyStore` is the reference implementation and the contract oracle;
+`samples/NetCrypto.Samples.CapableKeyStore` is the worked example.
+
+If you are writing a backend adapter, these ten rules are the contract — the shape alone is not:
+
+1. **Discovery honesty is bidirectional.** Everything you advertise must work; everything you do
+   not advertise must fail with `KeyStoreError.Unsupported` *before* any key creation, signing,
+   or agreement. Never silently downgrade the algorithm, curve, hash, or encoding. Discovery is
+   side-effect-free and returns a deeply immutable snapshot whose `Revision` is stable for the
+   instance lifetime. **A temporary outage is `Unavailable`, never an empty capability set** — an
+   empty set is indistinguishable from "this backend can do nothing" and makes callers reroute
+   permanently around a backend that is merely down.
+2. **Algorithm ids bind the observable encoding.** `es256-der` and `es256-p1363` are the same
+   curve and hash but different wire bytes; JOSE/JWS/COSE/WebAuthn mandate the latter, X.509/CMS
+   the former. Use the identifiers on `KeyStoreAlgorithms`, and never reuse one of them for
+   different bytes. You may advertise identifiers of your own — that is why
+   `KeyStoreAlgorithmId` is a string rather than a closed enum.
+3. **Instance identity is immutable and never reused.** Mint a fresh `KeyInstanceId` on generate
+   and import; make it permanently unusable on delete; yield a *different* one when the alias is
+   re-created. This is what makes alias rebinding detectable rather than silent.
+4. **Namespace scoping is least-privilege**, and it applies to the inherited `IKeyStore` members
+   too. Naming is not authorization.
+5. **Mutations are durably idempotent** under `(NamespaceId, KeyMutationKind, KeyOperationId)`.
+   Commit the mutation, a canonical request fingerprint, and the receipt atomically. Same id and
+   same request replays; same id and a different request is `IdempotencyConflict`. Make the
+   fingerprint encoding unambiguous across field boundaries — length-prefix it; a
+   delimiter-joined encoding lets an alias containing the delimiter collide with another request.
+6. **Cancellation never lies.** Before irreversible acceptance it changes nothing and throws
+   `OperationCanceledException`. After acceptance, return success, definite failure, or
+   `OutcomeUnknown` — never cancellation as an implied rollback.
+7. **Import transfers ownership exactly once,** through `TransferableKeyMaterial`. Read it once
+   at acceptance; a failure before acceptance leaves it usable for exactly one retry; a
+   recognized replay must destroy it *without reading it*, because an `OutcomeUnknown` import is
+   reconciled through `GetMutationOutcomeAsync` only — private material is never resubmitted.
+8. **BBS is advertised only where you can really do it,** and plain BLS signing is never
+   advertised or accepted as BBS.
+9. **Bounds are finite.** Every capability carries a positive `MaxInputBytes`; `null` and `0` are
+   not available to mean "unbounded".
+10. **Errors are portable.** Surface `KeyStoreException` with the taxonomy (`Unsupported`,
+    `IdempotencyConflict`, `AccessDenied`, `Throttled`, `Unavailable`, `OutcomeUnknown`) plus
+    `RetryAfter` where the backend gives one, and let no vendor SDK exception type escape. Keep
+    argument faults as parameter-named `ArgumentException` — a caller's own mistake must not be
+    retried as a backend condition.
+
+### Algorithm identifiers
+
+| Id | KeyType | Operation | Observable encoding |
+|---|---|---|---|
+| `ed25519` | Ed25519 | Sign | 64-byte EdDSA (RFC 8032) |
+| `es256-der` / `es256-p1363` | P-256 | Sign | DER / 64-byte `R‖S` |
+| `es384-der` / `es384-p1363` | P-384 | Sign | DER / 96-byte `R‖S` |
+| `es512-der` / `es512-p1363` | P-521 | Sign | DER / 132-byte `R‖S` |
+| `es256k` | secp256k1 | Sign | 64-byte compact `R‖S` (no DER variant exists) |
+| `bls12381g1-basic` / `bls12381g2-basic` | BLS12-381 G1 / G2 | Sign | 96- / 48-byte BLS basic |
+| `ecdh-x25519` / `ecdh-p256` / `ecdh-p384` / `ecdh-p521` | resp. | KeyAgreement | raw Z: 32 / 32 / 48 / 66 bytes |
+| `bbs-bls12381-sha256` | BLS12-381 G2 | BbsSign | 80-byte BBS (draft-10) |
 
 ## Algorithm and specification conformance
 
@@ -179,7 +248,9 @@ as release assets.
   detail and is **not** part of the public surface; validating a key never requires it.
 - **Boundaries.** EVM `v`-encoding/RLP/transactions, JOSE/JWE/SD-JWT envelopes,
   Data Integrity proofs, ECDH-ES/1PU assembly, and concrete HSM/KMS stores are
-  deliberately out of scope — they belong to the consumer layers.
+  deliberately out of scope — they belong to the consumer layers. `ICapableKeyStore` gives a
+  store the *self-description* that makes routing possible; it does not add the routing, and no
+  router, profile, or policy machinery ships here.
 - **Security posture.** None of the wrapped backends is independently audited or
   FIPS-validated; this is documented openly rather than implied otherwise.
 

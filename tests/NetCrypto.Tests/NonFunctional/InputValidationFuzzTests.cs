@@ -210,6 +210,154 @@ public class InputValidationFuzzTests
         act.Should().Throw<ArgumentNullException>().WithParameterName("jwk");
     }
 
+    // ── ICapableKeyStore (FR-7b) ──
+    //
+    // Deliberately a STRICTER contract than the rest of this file: a bare
+    // CryptographicException is a failure here, not a pass. On the custody surface it is how a
+    // caller's own malformed bytes get misreported as a retryable backend outage — the caller
+    // then retries bytes that can never work, and monitoring shows an outage that never happened.
+
+    /// <summary>Fuzz shapes for a caller-supplied string (alias or identifier).</summary>
+    public static TheoryData<string> MalformedText() => new()
+    {
+        "",
+        "\0",
+        "a\0b",
+        "a\nb",
+        new string('a', 513),
+        new string('中', 200),   // 600 UTF-8 bytes from 200 characters
+    };
+
+    [Theory]
+    [MemberData(nameof(MalformedText))]
+    public async Task CapableStore_MalformedAlias_ThrowsOnlyContractExceptions(string alias)
+    {
+        using var store = new CapableInMemoryKeyStore(Generator, Provider);
+        var operationId = new KeyOperationId("op-1");
+
+        await AssertKeyStoreContractAsync("GenerateAsync", $"alias '{Describe(alias)}'",
+            () => store.GenerateAsync(new KeyGenerateRequest(operationId, alias, KeyType.Ed25519)));
+        await AssertKeyStoreContractAsync("legacy GenerateAsync", $"alias '{Describe(alias)}'",
+            () => store.GenerateAsync(alias, KeyType.Ed25519));
+        await AssertKeyStoreContractAsync("GetInfoAsync", $"alias '{Describe(alias)}'",
+            () => store.GetInfoAsync(alias, new KeyInstanceId("i")));
+    }
+
+    [Theory]
+    [MemberData(nameof(MalformedText))]
+    public async Task CapableStore_MalformedIdentifiers_ThrowOnlyContractExceptions(string value)
+    {
+        using var store = new CapableInMemoryKeyStore(Generator, Provider);
+        var created = await store.GenerateAsync(new KeyGenerateRequest(new KeyOperationId("seed"), "k", KeyType.P256));
+
+        // The identifier constructors reject these, so reach the store through the default(T)
+        // hole they cannot close — which is the shape a real caller hits after deserialization.
+        await AssertKeyStoreContractAsync("SignAsync", "default instance id",
+            () => store.SignAsync(new KeySignRequest("k", default, KeyStoreAlgorithms.Es256P1363, new byte[8])));
+        await AssertKeyStoreContractAsync("SignAsync", "default algorithm",
+            () => store.SignAsync(new KeySignRequest("k", created.InstanceId, default, new byte[8])));
+        await AssertKeyStoreContractAsync("GetMutationOutcomeAsync", "default operation id",
+            () => store.GetMutationOutcomeAsync(KeyMutationKind.Generate, default));
+
+        // And the constructors themselves must refuse the raw value.
+        AssertKeyStoreContract("KeyOperationId..ctor", $"'{Describe(value)}'", () => _ = new KeyOperationId(value));
+        AssertKeyStoreContract("KeyInstanceId..ctor", $"'{Describe(value)}'", () => _ = new KeyInstanceId(value));
+    }
+
+    [Theory]
+    [MemberData(nameof(SizeMatrix))]
+    public async Task CapableStore_MalformedPeerPublicKey_ThrowsOnlyContractExceptions(int size)
+    {
+        using var store = new CapableInMemoryKeyStore(Generator, Provider);
+
+        foreach (var (keyType, algorithm) in new[]
+                 {
+                     (KeyType.X25519, KeyStoreAlgorithms.EcdhX25519),
+                     (KeyType.P256, KeyStoreAlgorithms.EcdhP256),
+                     (KeyType.P384, KeyStoreAlgorithms.EcdhP384),
+                     (KeyType.P521, KeyStoreAlgorithms.EcdhP521),
+                 })
+        {
+            var alias = $"agree-{keyType}-{size}";
+            var created = await store.GenerateAsync(new KeyGenerateRequest(new KeyOperationId(alias), alias, keyType));
+
+            // Non-zero fill: an all-zero buffer is a blind spot, not a negative test — for
+            // P-256, x = 0 decompresses to a genuinely valid point.
+            var peer = Enumerable.Repeat((byte)0x5A, size).ToArray();
+
+            await AssertKeyStoreContractAsync("DeriveSharedSecretAsync", $"{Shape(size)} peer key ({keyType})",
+                () => store.DeriveSharedSecretAsync(new KeyAgreementRequest(alias, created.InstanceId, algorithm, peer)));
+            await AssertKeyStoreContractAsync("legacy DeriveSharedSecretAsync", $"{Shape(size)} peer key ({keyType})",
+                () => store.DeriveSharedSecretAsync(alias, peer));
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(KeyTypeAndSizeMatrix))]
+    public void TransferableKeyMaterial_MalformedRawKey_ThrowsOnlyContractExceptions(KeyType keyType, int size)
+    {
+        var bytes = Enumerable.Repeat((byte)0x5A, size).ToArray();
+
+        AssertKeyStoreContract("TransferableKeyMaterial.FromRawKey", $"{Shape(size)} material ({keyType})",
+            () => TransferableKeyMaterial.FromRawKey(keyType, bytes, bytes).Dispose());
+    }
+
+    private static string Describe(string value) =>
+        value.Length > 32 ? $"<{value.Length} chars>" : value.Replace("\0", "\\0").Replace("\n", "\\n");
+
+    /// <summary>
+    /// The custody-surface contract: only the documented exception types, and specifically
+    /// <b>not</b> a bare <see cref="CryptographicException"/>, which NFR-3 reserves for genuine
+    /// crypto failures rather than malformed input.
+    /// </summary>
+    private static async Task AssertKeyStoreContractAsync(string member, string inputShape, Func<Task> act)
+    {
+        try
+        {
+            await act();
+        }
+        catch (Exception ex) when (IsInContract(ex))
+        {
+            // Within the FR-7b contract.
+        }
+        catch (Exception ex)
+        {
+            Assert.Fail(Explain(member, inputShape, ex));
+        }
+    }
+
+    private static bool IsInContract(Exception ex) =>
+        ex is ArgumentException or KeyStoreException
+            or KeyNotFoundException or ObjectDisposedException or InvalidOperationException;
+
+    private static string Explain(string member, string inputShape, Exception ex) =>
+        $"{member} with {inputShape} threw {ex.GetType().FullName}: '{ex.Message}'. " +
+        "The capable key-store surface must surface malformed input as a parameter-named " +
+        "ArgumentException — never a bare CryptographicException, and never a backend or " +
+        "platform type (NFR-3, FR-7b rule 10).";
+
+    private static void AssertKeyStoreContract(string member, string inputShape, Action act)
+    {
+        try
+        {
+            act();
+        }
+        catch (Exception ex) when (ex is ArgumentException or KeyStoreException
+            or KeyNotFoundException or ObjectDisposedException or InvalidOperationException)
+        {
+            // Within the FR-7b contract. (InvalidOperationException is the documented duplicate-
+            // alias signal inherited from InMemoryKeyStore.)
+        }
+        catch (Exception ex)
+        {
+            Assert.Fail(
+                $"{member} with {inputShape} threw {ex.GetType().FullName}: '{ex.Message}'. " +
+                "The capable key-store surface must surface malformed input as a parameter-named " +
+                "ArgumentException — never a bare CryptographicException, and never a backend or " +
+                "platform type (NFR-3, FR-7b rule 10).");
+        }
+    }
+
     // ── helpers ──
 
     private static string Shape(int size) => size switch

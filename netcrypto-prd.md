@@ -181,6 +181,217 @@ private scalar never leaves the store.
 - [ ] A test-double `IKeyStore` proves `KeyStoreSigner` never reads private key material (signature delegated; only alias + public key held).
 - [ ] `IKeyStore.DeriveSharedSecretAsync` returns a Z byte-for-byte identical to `ICryptoProvider.DeriveSharedSecret` for the extractable equivalent, across **X25519, P-256, P-384, P-521**, without exposing the private scalar; a non-ECDH stored key throws `ArgumentException`, an unknown alias throws `KeyNotFoundException`.
 
+### FR-7b — Capability-bearing key-custody surface (`ICapableKeyStore`, 1.6.0, issue #26)
+
+The contract a **production custody backend** — cloud KMS, HSM partition, encrypted software
+keystore — needs in order to sit behind `IKeyStore` without its consumer inventing a parallel
+signer surface downstream. Driver: the OpaqAI wallet platform's custody port, whose dependency
+gate audited 1.4.0 and 1.5.0 and found `IKeyStore` unable to back a production custody boundary.
+Every item below is a **generic property of key-custody backends**, not wallet-domain semantics.
+
+Sibling of FR-12b, and subject to the same **NFR-6** obligations: this is a delegating surface,
+so backend *output* is validated as strictly as backend input on every routed member.
+
+**Shape (all additive; `IKeyStore` gains no member, so every existing implementation and caller
+is source- and binary-compatible):**
+
+- `IKeyStoreCapabilityProvider` — `GetCapabilitiesAsync(ct)`.
+- `KeyStoreCapabilitySet(Revision, Capabilities)` + `KeyStoreCapability(KeyType, Operation,
+  Algorithm?, MaxInputBytes)` + `enum KeyStoreOperation { Generate, Import, Sign, KeyAgreement,
+  BbsSign }`. `KeyStoreCapabilitySet.Find(keyType, operation, algorithm)` is the validate-then-act
+  lookup.
+- Identity value types, each a validating `readonly record struct` over a string:
+  `KeyStoreNamespaceId`, `KeyInstanceId`, `KeyOperationId`, `KeyStoreAlgorithmId`.
+- `KeyStoreAlgorithms` — the identifier table below.
+- Requests: `KeyGenerateRequest`, `KeyImportRequest`, `KeyDeleteRequest`, `KeySignRequest`,
+  `KeyBbsSignRequest`, `KeyAgreementRequest`.
+- Results and receipts: `KeyMutationResult`, `KeyDeleteResult`, `enum KeyMutationKind`, abstract
+  `KeyMutationOutcome` with the closed set `KeyGeneratedOutcome` / `KeyImportedOutcome` /
+  `KeyDeletionOutcome`.
+- `TransferableKeyMaterial` — one-way, single-use import owner with **no** private-key read,
+  format, or export surface.
+- `KeyStoreException` + `enum KeyStoreError { Unsupported, IdempotencyConflict, AccessDenied,
+  Throttled, Unavailable, OutcomeUnknown }`, with `RetryAfter`.
+- `ICapableKeyStore : IKeyStore, IKeyStoreCapabilityProvider` — `NamespaceId`, the three
+  request-bearing mutations, `GetMutationOutcomeAsync`, `GetInfoAsync(alias, instanceId)`,
+  `SignAsync(KeySignRequest)`, `SignBbsAsync`, `DeriveSharedSecretAsync(KeyAgreementRequest)`.
+- `StoredKeyInfo` gains an optional init-only `KeyInstanceId? InstanceId` (defaulted `null`, so
+  every legacy path is unchanged); value equality and hash extended to include it.
+
+**Algorithm identifier table.** The identifier binds curve, hash, **and observable encoding** —
+this is what makes `EcdsaSignatureFormat` (FR-3) reachable for a key that never leaves its store.
+
+| Id | KeyType | Operation | Observable encoding |
+|---|---|---|---|
+| `ed25519` | Ed25519 | Sign | 64-byte EdDSA (RFC 8032) |
+| `es256-der` / `es256-p1363` | P256 | Sign | DER / 64-byte `R‖S` |
+| `es384-der` / `es384-p1363` | P384 | Sign | DER / 96-byte `R‖S` |
+| `es512-der` / `es512-p1363` | P521 | Sign | DER / 132-byte `R‖S` |
+| `es256k` | Secp256k1 | Sign | 64-byte compact `R‖S` — **no DER variant exists** |
+| `bls12381g1-basic` / `bls12381g2-basic` | Bls12381G1 / G2 | Sign | 96- / 48-byte BLS basic |
+| `ecdh-x25519`, `ecdh-p256`, `ecdh-p384`, `ecdh-p521` | resp. | KeyAgreement | raw Z (32/32/48/66) |
+| `bbs-bls12381-sha256` | Bls12381G2 | BbsSign | 80-byte BBS (draft-10) |
+
+A third-party store may advertise identifiers of its own — `KeyStoreAlgorithmId` is a string
+precisely so that it can — but must never reuse one of these for different observable bytes.
+
+**Semantics (normative — the contract, not just the shape):**
+
+1. **Discovery honesty is bidirectional.** Every advertised `(KeyType, Operation, Algorithm,
+   MaxInputBytes)` tuple must actually work; every unadvertised combination fails with
+   `KeyStoreException(Unsupported)` **before** key creation, signing, or agreement — never a
+   silent downgrade of algorithm, curve, hash, or encoding. Discovery is side-effect-free, safe
+   to call repeatedly, and returns a deeply immutable snapshot whose `Revision` is stable for the
+   instance lifetime; capability changes require a new instance. A temporary backend outage is
+   `Unavailable`, **never** an empty set.
+2. **Algorithm ids bind the observable encoding.** `SignAsync(KeySignRequest)` signs the exact
+   supplied bytes under exactly the requested advertised algorithm; a mismatch between the
+   request's algorithm and the addressed key fails before backend work.
+3. **Instance identity is immutable and never reused.** Generate and import mint a fresh
+   `KeyInstanceId`; delete makes it permanently unusable; re-creating the alias yields a
+   different one. This generalizes the FR-12b `KeyStoreSigner` alias-rebinding defense — which is
+   only possible there because a recoverable signature encodes its own signer — to the whole
+   surface.
+4. **Namespace scoping is least-privilege.** An instance sees only its `NamespaceId`, **including
+   through the inherited `IKeyStore` members**; the namespace is part of mutation identity.
+5. **Mutations are durably idempotent.** Identity is `(NamespaceId, KeyMutationKind,
+   KeyOperationId)`. The store atomically commits mutation + collision-resistant **canonical**
+   request fingerprint + outcome receipt. Same id and same request → the original logical result
+   with `Replayed = true`; same id and a different request → `IdempotencyConflict`. The
+   fingerprint encoding must be unambiguous across field boundaries (length-prefixed, not
+   delimiter-joined) so no two distinct requests can collide. Receipts survive restart and
+   multiple nodes for ≥ 24 h, and never less than the configured retry horizon.
+   `GetMutationOutcomeAsync` is side-effect-free and returns `null` **only** when the backend can
+   definitively prove no acceptance was retained; "I cannot tell" is `Unavailable`.
+6. **Cancellation never lies.** Before irreversible acceptance, cancellation has no effect on
+   state (`OperationCanceledException`). After acceptance begins, the call returns success,
+   definite failure, or `OutcomeUnknown` — never cancellation as an implied rollback. An
+   `OutcomeUnknown` generate or delete may be reconciled by exact replay or by the outcome
+   reader; an `OutcomeUnknown` **import** is reconciled through the outcome reader **only** —
+   private material is never resubmitted.
+7. **Import transfers ownership exactly once.** `TransferableKeyMaterial` is a dedicated,
+   exclusive, disposable owner with no read/format/export surface, holding the secret in a pinned
+   buffer per FR-18. Before acceptance, failure leaves the still-usable owner with the caller
+   (exactly one retry); at acceptance — including accepted-but-ack-lost — the caller's object
+   becomes permanently unreadable and the buffer is zeroized, leaving no extra plaintext copy. A
+   recognized **replay destroys the material without reading it**, so the "never resubmit private
+   material" rule holds even on the retry path. Import support is optional: a store that does not
+   advertise `Import` never sees material.
+8. **BBS by reference.** `SignBbsAsync` performs draft-pinned BBS multi-message signing over
+   `(Messages, Header)` with the store-held BLS12-381 G2 key, composing `IBbsCryptoProvider`
+   internally and adding no protocol semantics. Advertised only where the backend can actually do
+   it (for the reference store, exactly when `IBbsCryptoProvider.IsAvailable`); basic BLS signing
+   is never advertised or accepted as BBS, and vice versa.
+9. **Bounds are finite.** Every capability carries a positive finite `MaxInputBytes` — `null` and
+   `0` are not available to mean "unbounded". What it measures is per operation: alias UTF-8
+   length for Generate/Import, `Data` for Sign, `PeerPublicKey` for KeyAgreement, and total
+   `Messages` + `Header` for BbsSign. Oversize input fails **before** backend work, as a
+   parameter-named `ArgumentException` (NFR-3 governs shape faults; the taxonomy governs backend
+   conditions).
+10. **Errors are portable.** Routed operations surface `KeyStoreException` with the taxonomy
+    above (plus `RetryAfter` where the backend communicated one); **no vendor SDK, native, or
+    platform exception type leaks**, and the original is preserved as `InnerException`. Argument
+    faults remain parameter-named `ArgumentException`/`ArgumentNullException` per NFR-3 — a
+    caller's own mistake must not be retried as a backend condition, so a `CryptographicException`
+    raised over **caller-supplied key material** (an off-curve or low-order peer point) is a
+    parameter fault, not `Unavailable`; on a path whose only caller input is opaque bytes the same
+    exception really is a backend failure. A cancellation claim is honored only when the caller's
+    token was actually cancelled, and an argument fault from a provider is re-blamed on the caller
+    only when it names an input the store forwarded. The legacy `IKeyStore` members keep their
+    documented BCL exceptions unchanged.
+
+**Integrity obligations the FR-7b gates added** (each is NFR-6 applied to this surface; all four
+were found by the adversarial pass or the NFR-3 sweep against a first implementation that looked
+correct):
+
+11. **Produced output must speak for the advertised key.** Length is not identity. Before any
+    signature reaches the caller, the store verifies it under the public key it itself advertises
+    for that key instance, through a verifier **independent of the injected provider** — otherwise
+    a provider that forged the signature would also bless it. Failure is `Unavailable`. (An
+    independent verifier does not exist for BBS, so that path necessarily re-asks its provider;
+    the weaker guarantee is documented rather than implied. Key agreement has no verifier at all
+    and is length-checked only.)
+12. **Identifiers and aliases must be well-formed UTF-16.** `Encoding.UTF8` uses replacement
+    fallback, so every unpaired surrogate — and U+FFFD itself — encodes to the same three bytes.
+    Any identifier that reaches a UTF-8 encoding (the mutation fingerprint, a backend's wire
+    format) would then be indistinguishable from a different identifier, and one caller's mutation
+    would silently *replay* another's rather than conflicting. Rejected at the boundary with a
+    parameter name; well-formed surrogate pairs stay legal.
+13. **Import must prove the public key belongs to the private key.** `StoredKeyInfo.PublicKey` is
+    the verification identity downstream DID/VC code publishes. The store derives the public key
+    from the transferred secret and rejects a mismatch before commit; the transfer is spent either
+    way, because the store has already seen the secret. Wrong-length material is refused at
+    `TransferableKeyMaterial` construction, before it ever crosses the boundary.
+14. **A provider must not re-enter the store.** `Monitor` is reentrant, so a provider callback
+    would otherwise pass straight through the backend lock — and a nested delete zeroizes the
+    pinned buffer an in-flight private-key borrow is still reading. Re-entry on the same thread is
+    refused.
+
+**Reference implementation.** `CapableInMemoryKeyStore` implements all of it end to end, over a
+shared `InMemoryKeyStoreBackend` (keys keyed by `(namespace, alias)`, mutation ledger keyed by
+`(namespace, kind, operationId)`). It is a **sibling** of `InMemoryKeyStore`, which is left byte-
+for-byte untouched. Sharing the backend across instances is what makes namespace isolation and
+receipt durability testable at all — over separate dictionaries both claims are vacuous. Of the
+taxonomy it produces `Unsupported`, `IdempotencyConflict`, and `Unavailable`; it never produces
+`AccessDenied`, `Throttled`, or `OutcomeUnknown`, because it has no remote call to be denied,
+throttled, or lost and its commit is a single locked write.
+
+**Boundary — what this deliberately does not add:** no export operation anywhere; no KDF and no
+protocol semantics (`DeriveSharedSecretAsync` still returns raw Z; BBS keeps its draft-pinned
+meaning); no router/profile/policy machinery — which store handles which key is downstream
+composition. Paged `ListAsync` is out of scope and tracked separately.
+
+**Acceptance criteria:**
+- [ ] Every advertised sign tuple round-trips against the `ICryptoProvider` oracle, and every
+  advertised agreement tuple produces a Z byte-for-byte equal to the extractable equivalent.
+- [ ] A curated set of unadvertised tuples (wrong curve for the id, an id from another operation,
+  case variants, an encoding variant that does not exist) each throws `Unsupported` **before**
+  mutation, with store contents asserted unchanged.
+- [ ] `es256-p1363` output verifies under `IeeeP1363` and **fails** under DER, and the converse;
+  P-384/P-521 widths are 96/132; `es256k` is always 64-byte compact.
+- [ ] Delete → recreate alias → the stale `KeyInstanceId` fails sign and agreement
+  (`KeyNotFoundException`), returns `null` from `GetInfoAsync`, and deletes nothing; the current
+  instance still works; ids never repeat across the backend lifetime.
+- [ ] Two instances over one backend with disjoint namespaces: cross-namespace get/list/sign/
+  agree/delete/`CreateSignerAsync` **and the inherited `IKeyStore` members** all fail; the same
+  `KeyOperationId` in two namespaces does not collide.
+- [ ] Same id + same request → same logical result with `Replayed = true` and exactly one key;
+  same id + different request → `IdempotencyConflict`; the fingerprint is unambiguous across
+  field boundaries (an alias containing a plausible delimiter cannot collide); the ledger
+  survives a store "restart" over the same backend; receipts read back per kind.
+- [ ] Accepted import latches the material unreadable and zeroizes its buffer (FR-18 probe
+  pattern); a failure before acceptance leaves it usable for exactly one retry; a replayed import
+  never **reads** the material (asserted with a counting accessor); no member exposes private
+  bytes (reflection assertion over the public surface).
+- [ ] Cancellation before acceptance → `OperationCanceledException` with **no key and no
+  receipt**; an import cancelled before acceptance leaves the material usable.
+- [ ] `MaxInputBytes + 1` on sign, agreement, and BBS fails before the provider is called
+  (asserted with a counting provider); exactly `MaxInputBytes` is accepted.
+- [ ] BBS: store-held signature verifies under `IBbsCryptoProvider.Verify` with the same header
+  and fails with a different one; `BbsSign` advertised iff `IsAvailable`; the BBS-absent path
+  refuses with `Unsupported` without calling the provider.
+- [ ] Adversarial wrap: no `NBitcoin`/NSec/Nethermind/native/platform exception type escapes any
+  `ICapableKeyStore` member; a wrongly-sized or retained-and-later-mutated provider result cannot
+  reach the caller (NFR-6).
+- [ ] NFR-3 across the new surface in all three families, including the `default(T)` hole and
+  `with`-expression mutation of every request record and identifier struct, asserting the
+  parameter name. A `with` expression must not be able to install a value the constructor would
+  have rejected — validation lives on the `init` accessor, not in a property initializer, because
+  `with` skips the latter.
+- [ ] A signature made under a *different* key, and a well-formed-but-meaningless DER or BBS
+  signature, are rejected; a provider that also lies in `Verify` cannot bless its own forgery.
+- [ ] An unpaired-surrogate alias or identifier is refused with a parameter name, and cannot
+  replay a mutation issued under a different one; a well-formed surrogate pair still works.
+- [ ] A `Messages` list whose enumerator and indexer disagree cannot sign past `MaxInputBytes`
+  (asserted with a counting provider).
+- [ ] An import whose public key does not belong to its private key is rejected before commit, and
+  wrong-length material is refused at construction; an honest import still round-trips.
+- [ ] A provider that calls back into the store on the same thread is refused rather than allowed
+  through the backend lock, and the nested mutation does not happen.
+- [ ] Each of the above fails with its guard reverted (the regression tests are proven genuine).
+- [ ] `samples/NetCrypto.Samples.CapableKeyStore` exits 0 both with and without the native BBS
+  library, and the FR-17 API coverage check passes.
+
 ### FR-8 — JWK conversion
 
 Migrate `JwkConverter` verbatim (`ToPublicJwk(KeyType, byte[])`, `ToPublicJwk(KeyPair)`, `ToPrivateJwk(KeyPair)`, `ExtractPublicKey(JsonWebKey)`), including base64url handling via `NetCid.Multibase` and SEC1 compressed-point reconstruction. `KeyPair.ToPublicJwk()/ToPrivateJwk()` convenience methods migrate with `KeyPair` (FR-1).
@@ -633,12 +844,13 @@ Normative completeness check for concept §8 package-level criterion 6 ("surface
 | §2.5 | A256GCM; A256CBC-HS512; A256KW; XC20P | didcomm-dotnet (DIDComm v2.1 suites) | FR-13, FR-14, FR-15, FR-16 |
 | §2.6 | Key model, `KeyType`⇄multicodec, generation, Ed25519→X25519 | all consumers | FR-1, FR-6 |
 | §2.6 | `ISigner` / `KeyPairSigner` / `KeyStoreSigner` / `IKeyStore` | all signing consumers | FR-7 |
+| §2.6 | Capability discovery, namespace + key-instance identity, idempotent mutations, algorithm/encoding-bearing sign & agreement, one-way import, BBS-by-reference, portable error taxonomy | production custody backends (cloud KMS, HSM, encrypted keystore) | FR-7b |
 | §2.7 | JWK ⇄ raw key conversion | net-did, dataproofs-dotnet, didcomm-dotnet | FR-8 |
 | §2.8 | DI registration (`AddNetCrypto`, TryAdd seam) | all consumers | FR-9 |
 | §5 | Ciphersuite parameterization; Posture-1 swap seam; API hygiene | architecture decisions 6, 10 | FR-5, FR-9, NFR-1 |
 | §6 | 5-RID native distribution; BBS-absent supported mode | concept decisions 7, 8 | FR-20, FR-21, FR-22, FR-5 |
 | §2 (cross-cutting) | Developer examples for the entire public surface | maintainer requirement | FR-17 |
-| §2.6 (cross-cutting) | HSM-first delegation — a private key that never leaves its store | all key-store consumers | FR-7, FR-12b, **NFR-6** |
+| §2.6 (cross-cutting) | HSM-first delegation — a private key that never leaves its store | all key-store consumers | FR-7, FR-7b, FR-12b, **NFR-6** |
 
 ## Appendix — Test-vector source index
 
