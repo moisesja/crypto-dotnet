@@ -82,6 +82,7 @@ All driven by DIDComm v2.1 (`didcomm-dotnet`):
 - EC point validation and SEC1 point decompression utilities.
 - **Signing abstraction:** `ISigner` with `KeyPairSigner` (in-memory) and `KeyStoreSigner` (HSM/vault-backed via `IKeyStore`; private key never leaves the store). Moves here because every domain library signs.
 - **Key storage abstraction:** `IKeyStore`. Concrete stores (file, cloud KMS, enclave) remain out of scope for v1 beyond what migrates.
+- **Custody boundary contract (1.6.0):** `ICapableKeyStore` — the derived interface a *production* custody backend needs so its consumer never has to fork a parallel signer surface: capability discovery, namespace scoping, immutable key-instance identity, durably idempotent mutations with readable receipts, algorithm/encoding-bearing signing and agreement, one-way import ownership, BBS-by-reference, and a portable error taxonomy. Purely additive — `IKeyStore` gains no member. NetCrypto still ships **no** concrete backend: it gets the self-description that makes routing possible, not the routing.
 
 ### 2.7 Key representation — migrates
 

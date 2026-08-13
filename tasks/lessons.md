@@ -164,3 +164,74 @@ half-edit without re-deriving all of it.
 
 → Rule: AGENTS.md Task Management §0;
 [`issue-kickoff`](../.claude/skills/issue-kickoff/SKILL.md) (branch first; resume protocol).
+
+## L11 — Validation in a record's property *initializer* is not validation
+
+Building the issue #26 custody surface, I put every guard in a property initializer —
+`public string Value { get; init; } = Validate(Value, …);` — and wrote a design note claiming
+the `with`-expression hole "is not closable by the type itself". Both gates disagreed. A
+property initializer runs in the primary constructor only; the record copy-constructor copies
+backing fields and `with` calls the auto-implemented `init` setter, so every check is skipped.
+The NFR-3 sweep confirmed it on 20 members across six types.
+
+That would have been a footnote if the identifier structs were the only victims — the store
+re-validates those at every entry point, by design. But `KeyStoreCapability` and
+`KeyStoreCapabilitySet` were re-validated nowhere, so a `with` could produce a `Sign` capability
+with no algorithm, a zero byte-bound, or a capability list containing `null` — and `Find`,
+`Equals`, and `GetHashCode` then threw `NullReferenceException`, which is on NFR-3's forbidden
+list. It also falsified the XML doc I had written promising the caller's list could not change
+what a store advertised.
+
+The fix was already in the codebase: `StoredKeyInfo.PublicKey` validates on its `init`
+accessor, which is `with`-safe. I had the pattern in front of me and used the weaker one.
+
+→ Rule: validate on the `init` accessor, never in a property initializer, for any record whose
+invariants matter. `default(T)` on a `record struct` remains genuinely unclosable and is what
+consumer-side re-validation is for — don't let the two blur together. FR-7b AC;
+[`input-validation-sweep`](../.claude/skills/input-validation-sweep/SKILL.md) family (c).
+
+## L12 — A length check on backend output is not an identity check
+
+The same surface validated provider results by length and called that NFR-6 compliance — the
+XML doc on the helper literally said it "validates a provider result before it reaches the
+caller (NFR-6)". The adversarial pass returned a well-formed 64-byte P-256 signature made under
+a *different key* and the store handed it to the caller; 80 bytes of `0xAB` passed as a BBS
+signature; a single `0xDE` byte passed as DER, where no length check applies at all.
+
+NFR-6.2 asks for `recover(output) == advertised identity`, and the repo already does exactly
+that in `KeyStoreSigner.CopyAndVerify` — on the *recoverable* path, where it was easy because a
+recoverable signature encodes its own signer. I generalized the alias-rebinding half of that
+defense to the new surface and left the identity half behind, because on the ordinary signing
+path it costs a verification. [[L9]] is the same shape one level up: that pass certified input
+handling and missed the boundary; this one certified output *shape* and missed output *meaning*.
+
+One further turn of the screw the pass forced: verify through an internal provider, not the
+injected one. A provider that forged the signature will happily verify it too.
+
+**Addendum (PR #27 review):** I then applied that rule to ECDSA and exempted BBS with a written
+justification — "no independent in-repo verifier exists" — while `DefaultBbsCryptoProvider`,
+the independent verifier, sat in the same file's imports. The review reproduced the resulting
+self-certification with a provider lying in both `Sign` and `Verify`. A claimed limitation is a
+checkable fact, not a doc sentence: before writing "X does not exist, so the weaker guarantee
+is documented", search for X.
+
+→ Rule: NFR-6, FR-7b rule 11; [`adversarial-pass`](../.claude/skills/adversarial-pass/SKILL.md)
+("hostile or buggy backend output"). See [[L9]].
+
+## L13 — A read-only outer collection does not make mutable elements trustworthy
+
+During the PR #27 repair I separated BBS verification from the injected provider, but initially
+passed the producer and independent verifier the same `IReadOnlyList<byte[]>`. The outer list
+prevented replacement of an element; each `byte[]` element was still mutable. A hostile producer
+rewrote one message, signed the rewrite, and the independent verifier then checked those same
+rewritten bytes. The verification provider was independent, but its evidence was not.
+
+The same review also exposed the exception analogue: filtering only familiar backend exception
+types misses fabricated cancellation, disposed provider sessions, and internal argument faults.
+At an injected-code boundary, classify an exception by where it originated and whether a narrow,
+documented caller-input signal applies — not by a hopeful list of concrete exception types.
+
+→ Rule: when an untrusted dependency receives mutable nested buffers, retain an independent deep
+snapshot for validation and pass the dependency a separate copy. Treat every exception thrown
+inside the dependency call as backend-originated except narrowly specified caller-input contracts.
+NFR-6, NFR-3; [`adversarial-pass`](../.claude/skills/adversarial-pass/SKILL.md).

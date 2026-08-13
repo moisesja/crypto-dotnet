@@ -8,6 +8,29 @@ NetCrypto.BbsCiphersuite.Bls12381Sha256 = 0 -> NetCrypto.BbsCiphersuite
 NetCrypto.BbsUnavailableException
 NetCrypto.BbsUnavailableException.BbsUnavailableException(string! message) -> void
 NetCrypto.BbsUnavailableException.BbsUnavailableException(string! message, System.Exception? innerException) -> void
+NetCrypto.CapableInMemoryKeyStore
+NetCrypto.CapableInMemoryKeyStore.CapableInMemoryKeyStore(NetCrypto.IKeyGenerator! keyGenerator, NetCrypto.ICryptoProvider! cryptoProvider, NetCrypto.IBbsCryptoProvider? bbsProvider = null) -> void
+NetCrypto.CapableInMemoryKeyStore.CapableInMemoryKeyStore(NetCrypto.InMemoryKeyStoreBackend! backend, NetCrypto.KeyStoreNamespaceId namespaceId, NetCrypto.IKeyGenerator! keyGenerator, NetCrypto.ICryptoProvider! cryptoProvider, NetCrypto.IBbsCryptoProvider? bbsProvider = null, System.TimeProvider? timeProvider = null) -> void
+NetCrypto.CapableInMemoryKeyStore.CreateSignerAsync(string! alias, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.ISigner!>!
+NetCrypto.CapableInMemoryKeyStore.DeleteAsync(NetCrypto.KeyDeleteRequest! request, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.KeyDeleteResult!>!
+NetCrypto.CapableInMemoryKeyStore.DeleteAsync(string! alias, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+NetCrypto.CapableInMemoryKeyStore.DeriveSharedSecretAsync(NetCrypto.KeyAgreementRequest! request, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
+NetCrypto.CapableInMemoryKeyStore.DeriveSharedSecretAsync(string! alias, System.ReadOnlyMemory<byte> peerPublicKey, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
+NetCrypto.CapableInMemoryKeyStore.Dispose() -> void
+NetCrypto.CapableInMemoryKeyStore.GenerateAsync(NetCrypto.KeyGenerateRequest! request, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.KeyMutationResult!>!
+NetCrypto.CapableInMemoryKeyStore.GenerateAsync(string! alias, NetCrypto.KeyType keyType, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.StoredKeyInfo!>!
+NetCrypto.CapableInMemoryKeyStore.GetCapabilitiesAsync(System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.KeyStoreCapabilitySet!>!
+NetCrypto.CapableInMemoryKeyStore.GetInfoAsync(string! alias, NetCrypto.KeyInstanceId instanceId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.StoredKeyInfo?>!
+NetCrypto.CapableInMemoryKeyStore.GetInfoAsync(string! alias, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.StoredKeyInfo?>!
+NetCrypto.CapableInMemoryKeyStore.GetMutationOutcomeAsync(NetCrypto.KeyMutationKind kind, NetCrypto.KeyOperationId operationId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.KeyMutationOutcome?>!
+NetCrypto.CapableInMemoryKeyStore.ImportAsync(NetCrypto.KeyImportRequest! request, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.KeyMutationResult!>!
+NetCrypto.CapableInMemoryKeyStore.ImportAsync(string! alias, NetCrypto.KeyPair! keyPair, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.StoredKeyInfo!>!
+NetCrypto.CapableInMemoryKeyStore.ListAsync(System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<string!>!>!
+NetCrypto.CapableInMemoryKeyStore.NamespaceId.get -> NetCrypto.KeyStoreNamespaceId
+NetCrypto.CapableInMemoryKeyStore.SignAsync(NetCrypto.KeySignRequest! request, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
+NetCrypto.CapableInMemoryKeyStore.SignAsync(string! alias, System.ReadOnlyMemory<byte> data, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
+NetCrypto.CapableInMemoryKeyStore.SignBbsAsync(NetCrypto.KeyBbsSignRequest! request, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
+NetCrypto.CapableInMemoryKeyStore.SignDigestAsync(string! alias, System.ReadOnlyMemory<byte> digest32, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.RecoverableSignature>!
 NetCrypto.ConcatKdf
 NetCrypto.DefaultBbsCryptoProvider
 NetCrypto.DefaultBbsCryptoProvider.Ciphersuite.get -> NetCrypto.BbsCiphersuite
@@ -45,6 +68,16 @@ NetCrypto.IBbsCryptoProvider.IsAvailable.get -> bool
 NetCrypto.IBbsCryptoProvider.Sign(System.ReadOnlySpan<byte> privateKey, System.Collections.Generic.IReadOnlyList<byte[]!>! messages, System.ReadOnlySpan<byte> header = default(System.ReadOnlySpan<byte>)) -> byte[]!
 NetCrypto.IBbsCryptoProvider.Verify(System.ReadOnlySpan<byte> publicKey, System.ReadOnlySpan<byte> signature, System.Collections.Generic.IReadOnlyList<byte[]!>! messages, System.ReadOnlySpan<byte> header = default(System.ReadOnlySpan<byte>)) -> bool
 NetCrypto.IBbsCryptoProvider.VerifyProof(System.ReadOnlySpan<byte> publicKey, byte[]! proof, System.Collections.Generic.IReadOnlyList<byte[]!>! revealedMessages, System.Collections.Generic.IReadOnlyList<int>! revealedIndices, System.ReadOnlySpan<byte> presentationHeader, System.ReadOnlySpan<byte> header = default(System.ReadOnlySpan<byte>)) -> bool
+NetCrypto.ICapableKeyStore
+NetCrypto.ICapableKeyStore.DeleteAsync(NetCrypto.KeyDeleteRequest! request, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.KeyDeleteResult!>!
+NetCrypto.ICapableKeyStore.DeriveSharedSecretAsync(NetCrypto.KeyAgreementRequest! request, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
+NetCrypto.ICapableKeyStore.GenerateAsync(NetCrypto.KeyGenerateRequest! request, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.KeyMutationResult!>!
+NetCrypto.ICapableKeyStore.GetInfoAsync(string! alias, NetCrypto.KeyInstanceId instanceId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.StoredKeyInfo?>!
+NetCrypto.ICapableKeyStore.GetMutationOutcomeAsync(NetCrypto.KeyMutationKind kind, NetCrypto.KeyOperationId operationId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.KeyMutationOutcome?>!
+NetCrypto.ICapableKeyStore.ImportAsync(NetCrypto.KeyImportRequest! request, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.KeyMutationResult!>!
+NetCrypto.ICapableKeyStore.NamespaceId.get -> NetCrypto.KeyStoreNamespaceId
+NetCrypto.ICapableKeyStore.SignAsync(NetCrypto.KeySignRequest! request, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
+NetCrypto.ICapableKeyStore.SignBbsAsync(NetCrypto.KeyBbsSignRequest! request, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
 NetCrypto.ICryptoProvider
 NetCrypto.ICryptoProvider.DeriveSharedSecret(NetCrypto.KeyType keyType, System.ReadOnlySpan<byte> privateKey, System.ReadOnlySpan<byte> publicKey) -> byte[]!
 NetCrypto.ICryptoProvider.KeyAgreement(System.ReadOnlySpan<byte> privateKey, System.ReadOnlySpan<byte> publicKey) -> byte[]!
@@ -68,6 +101,8 @@ NetCrypto.IKeyStore.ImportAsync(string! alias, NetCrypto.KeyPair! keyPair, Syste
 NetCrypto.IKeyStore.ListAsync(System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<string!>!>!
 NetCrypto.IKeyStore.SignAsync(string! alias, System.ReadOnlyMemory<byte> data, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
 NetCrypto.IKeyStore.SignDigestAsync(string! alias, System.ReadOnlyMemory<byte> digest32, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.RecoverableSignature>!
+NetCrypto.IKeyStoreCapabilityProvider
+NetCrypto.IKeyStoreCapabilityProvider.GetCapabilitiesAsync(System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.KeyStoreCapabilitySet!>!
 NetCrypto.IRecoverableDigestSigner
 NetCrypto.IRecoverableDigestSigner.KeyType.get -> NetCrypto.KeyType
 NetCrypto.IRecoverableDigestSigner.PublicKey.get -> System.ReadOnlyMemory<byte>
@@ -89,8 +124,101 @@ NetCrypto.InMemoryKeyStore.InMemoryKeyStore(NetCrypto.IKeyGenerator! keyGenerato
 NetCrypto.InMemoryKeyStore.ListAsync(System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<string!>!>!
 NetCrypto.InMemoryKeyStore.SignAsync(string! alias, System.ReadOnlyMemory<byte> data, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
 NetCrypto.InMemoryKeyStore.SignDigestAsync(string! alias, System.ReadOnlyMemory<byte> digest32, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.RecoverableSignature>!
+NetCrypto.InMemoryKeyStoreBackend
+NetCrypto.InMemoryKeyStoreBackend.Dispose() -> void
+NetCrypto.InMemoryKeyStoreBackend.InMemoryKeyStoreBackend() -> void
 NetCrypto.JwkConverter
 NetCrypto.Keccak256
+NetCrypto.KeyAgreementRequest
+NetCrypto.KeyAgreementRequest.Algorithm.get -> NetCrypto.KeyStoreAlgorithmId
+NetCrypto.KeyAgreementRequest.Algorithm.init -> void
+NetCrypto.KeyAgreementRequest.Alias.get -> string!
+NetCrypto.KeyAgreementRequest.Alias.init -> void
+NetCrypto.KeyAgreementRequest.InstanceId.get -> NetCrypto.KeyInstanceId
+NetCrypto.KeyAgreementRequest.InstanceId.init -> void
+NetCrypto.KeyAgreementRequest.KeyAgreementRequest(string! Alias, NetCrypto.KeyInstanceId InstanceId, NetCrypto.KeyStoreAlgorithmId Algorithm, System.ReadOnlyMemory<byte> PeerPublicKey) -> void
+NetCrypto.KeyAgreementRequest.PeerPublicKey.get -> System.ReadOnlyMemory<byte>
+NetCrypto.KeyAgreementRequest.PeerPublicKey.init -> void
+NetCrypto.KeyBbsSignRequest
+NetCrypto.KeyBbsSignRequest.Algorithm.get -> NetCrypto.KeyStoreAlgorithmId
+NetCrypto.KeyBbsSignRequest.Algorithm.init -> void
+NetCrypto.KeyBbsSignRequest.Alias.get -> string!
+NetCrypto.KeyBbsSignRequest.Alias.init -> void
+NetCrypto.KeyBbsSignRequest.Header.get -> System.ReadOnlyMemory<byte>
+NetCrypto.KeyBbsSignRequest.Header.init -> void
+NetCrypto.KeyBbsSignRequest.InstanceId.get -> NetCrypto.KeyInstanceId
+NetCrypto.KeyBbsSignRequest.InstanceId.init -> void
+NetCrypto.KeyBbsSignRequest.KeyBbsSignRequest(string! Alias, NetCrypto.KeyInstanceId InstanceId, NetCrypto.KeyStoreAlgorithmId Algorithm, System.Collections.Generic.IReadOnlyList<System.ReadOnlyMemory<byte>>! Messages, System.ReadOnlyMemory<byte> Header) -> void
+NetCrypto.KeyBbsSignRequest.Messages.get -> System.Collections.Generic.IReadOnlyList<System.ReadOnlyMemory<byte>>!
+NetCrypto.KeyBbsSignRequest.Messages.init -> void
+NetCrypto.KeyDeleteRequest
+NetCrypto.KeyDeleteRequest.Alias.get -> string!
+NetCrypto.KeyDeleteRequest.Alias.init -> void
+NetCrypto.KeyDeleteRequest.InstanceId.get -> NetCrypto.KeyInstanceId
+NetCrypto.KeyDeleteRequest.InstanceId.init -> void
+NetCrypto.KeyDeleteRequest.KeyDeleteRequest(NetCrypto.KeyOperationId OperationId, string! Alias, NetCrypto.KeyInstanceId InstanceId) -> void
+NetCrypto.KeyDeleteRequest.OperationId.get -> NetCrypto.KeyOperationId
+NetCrypto.KeyDeleteRequest.OperationId.init -> void
+NetCrypto.KeyDeleteResult
+NetCrypto.KeyDeleteResult.Deleted.get -> bool
+NetCrypto.KeyDeleteResult.Deleted.init -> void
+NetCrypto.KeyDeleteResult.KeyDeleteResult(bool Deleted, bool Replayed) -> void
+NetCrypto.KeyDeleteResult.Replayed.get -> bool
+NetCrypto.KeyDeleteResult.Replayed.init -> void
+NetCrypto.KeyDeletionOutcome
+NetCrypto.KeyDeletionOutcome.Deleted.get -> bool
+NetCrypto.KeyDeletionOutcome.InstanceId.get -> NetCrypto.KeyInstanceId
+NetCrypto.KeyDeletionOutcome.KeyDeletionOutcome(NetCrypto.KeyOperationId operationId, System.DateTimeOffset recordedAt, NetCrypto.KeyInstanceId instanceId, bool deleted) -> void
+NetCrypto.KeyGenerateRequest
+NetCrypto.KeyGenerateRequest.Alias.get -> string!
+NetCrypto.KeyGenerateRequest.Alias.init -> void
+NetCrypto.KeyGenerateRequest.KeyGenerateRequest(NetCrypto.KeyOperationId OperationId, string! Alias, NetCrypto.KeyType KeyType) -> void
+NetCrypto.KeyGenerateRequest.KeyType.get -> NetCrypto.KeyType
+NetCrypto.KeyGenerateRequest.KeyType.init -> void
+NetCrypto.KeyGenerateRequest.OperationId.get -> NetCrypto.KeyOperationId
+NetCrypto.KeyGenerateRequest.OperationId.init -> void
+NetCrypto.KeyGeneratedOutcome
+NetCrypto.KeyGeneratedOutcome.Info.get -> NetCrypto.StoredKeyInfo!
+NetCrypto.KeyGeneratedOutcome.InstanceId.get -> NetCrypto.KeyInstanceId
+NetCrypto.KeyGeneratedOutcome.KeyGeneratedOutcome(NetCrypto.KeyOperationId operationId, System.DateTimeOffset recordedAt, NetCrypto.StoredKeyInfo! info, NetCrypto.KeyInstanceId instanceId) -> void
+NetCrypto.KeyImportRequest
+NetCrypto.KeyImportRequest.Alias.get -> string!
+NetCrypto.KeyImportRequest.Alias.init -> void
+NetCrypto.KeyImportRequest.KeyImportRequest(NetCrypto.KeyOperationId OperationId, string! Alias, NetCrypto.TransferableKeyMaterial! Material) -> void
+NetCrypto.KeyImportRequest.Material.get -> NetCrypto.TransferableKeyMaterial!
+NetCrypto.KeyImportRequest.Material.init -> void
+NetCrypto.KeyImportRequest.OperationId.get -> NetCrypto.KeyOperationId
+NetCrypto.KeyImportRequest.OperationId.init -> void
+NetCrypto.KeyImportedOutcome
+NetCrypto.KeyImportedOutcome.Info.get -> NetCrypto.StoredKeyInfo!
+NetCrypto.KeyImportedOutcome.InstanceId.get -> NetCrypto.KeyInstanceId
+NetCrypto.KeyImportedOutcome.KeyImportedOutcome(NetCrypto.KeyOperationId operationId, System.DateTimeOffset recordedAt, NetCrypto.StoredKeyInfo! info, NetCrypto.KeyInstanceId instanceId) -> void
+NetCrypto.KeyInstanceId
+NetCrypto.KeyInstanceId.KeyInstanceId() -> void
+NetCrypto.KeyInstanceId.KeyInstanceId(string! Value) -> void
+NetCrypto.KeyInstanceId.Value.get -> string!
+NetCrypto.KeyInstanceId.Value.init -> void
+NetCrypto.KeyMutationKind
+NetCrypto.KeyMutationKind.Delete = 2 -> NetCrypto.KeyMutationKind
+NetCrypto.KeyMutationKind.Generate = 0 -> NetCrypto.KeyMutationKind
+NetCrypto.KeyMutationKind.Import = 1 -> NetCrypto.KeyMutationKind
+NetCrypto.KeyMutationOutcome
+NetCrypto.KeyMutationOutcome.Kind.get -> NetCrypto.KeyMutationKind
+NetCrypto.KeyMutationOutcome.OperationId.get -> NetCrypto.KeyOperationId
+NetCrypto.KeyMutationOutcome.RecordedAt.get -> System.DateTimeOffset
+NetCrypto.KeyMutationResult
+NetCrypto.KeyMutationResult.Info.get -> NetCrypto.StoredKeyInfo!
+NetCrypto.KeyMutationResult.Info.init -> void
+NetCrypto.KeyMutationResult.InstanceId.get -> NetCrypto.KeyInstanceId
+NetCrypto.KeyMutationResult.InstanceId.init -> void
+NetCrypto.KeyMutationResult.KeyMutationResult(NetCrypto.StoredKeyInfo! Info, NetCrypto.KeyInstanceId InstanceId, bool Replayed) -> void
+NetCrypto.KeyMutationResult.Replayed.get -> bool
+NetCrypto.KeyMutationResult.Replayed.init -> void
+NetCrypto.KeyOperationId
+NetCrypto.KeyOperationId.KeyOperationId() -> void
+NetCrypto.KeyOperationId.KeyOperationId(string! Value) -> void
+NetCrypto.KeyOperationId.Value.get -> string!
+NetCrypto.KeyOperationId.Value.init -> void
 NetCrypto.KeyPair
 NetCrypto.KeyPair.Dispose() -> void
 NetCrypto.KeyPair.KeyPair() -> void
@@ -113,6 +241,64 @@ NetCrypto.KeyPairSigner.MultibasePublicKey.get -> string!
 NetCrypto.KeyPairSigner.PublicKey.get -> System.ReadOnlyMemory<byte>
 NetCrypto.KeyPairSigner.SignAsync(System.ReadOnlyMemory<byte> data, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<byte[]!>!
 NetCrypto.KeyPairSigner.SignDigestAsync(System.ReadOnlyMemory<byte> digest32, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<NetCrypto.RecoverableSignature>!
+NetCrypto.KeySignRequest
+NetCrypto.KeySignRequest.Algorithm.get -> NetCrypto.KeyStoreAlgorithmId
+NetCrypto.KeySignRequest.Algorithm.init -> void
+NetCrypto.KeySignRequest.Alias.get -> string!
+NetCrypto.KeySignRequest.Alias.init -> void
+NetCrypto.KeySignRequest.Data.get -> System.ReadOnlyMemory<byte>
+NetCrypto.KeySignRequest.Data.init -> void
+NetCrypto.KeySignRequest.InstanceId.get -> NetCrypto.KeyInstanceId
+NetCrypto.KeySignRequest.InstanceId.init -> void
+NetCrypto.KeySignRequest.KeySignRequest(string! Alias, NetCrypto.KeyInstanceId InstanceId, NetCrypto.KeyStoreAlgorithmId Algorithm, System.ReadOnlyMemory<byte> Data) -> void
+NetCrypto.KeyStoreAlgorithmId
+NetCrypto.KeyStoreAlgorithmId.KeyStoreAlgorithmId() -> void
+NetCrypto.KeyStoreAlgorithmId.KeyStoreAlgorithmId(string! Value) -> void
+NetCrypto.KeyStoreAlgorithmId.Value.get -> string!
+NetCrypto.KeyStoreAlgorithmId.Value.init -> void
+NetCrypto.KeyStoreAlgorithms
+NetCrypto.KeyStoreCapability
+NetCrypto.KeyStoreCapability.Algorithm.get -> NetCrypto.KeyStoreAlgorithmId?
+NetCrypto.KeyStoreCapability.Algorithm.init -> void
+NetCrypto.KeyStoreCapability.KeyStoreCapability(NetCrypto.KeyType KeyType, NetCrypto.KeyStoreOperation Operation, NetCrypto.KeyStoreAlgorithmId? Algorithm, int MaxInputBytes) -> void
+NetCrypto.KeyStoreCapability.KeyType.get -> NetCrypto.KeyType
+NetCrypto.KeyStoreCapability.KeyType.init -> void
+NetCrypto.KeyStoreCapability.MaxInputBytes.get -> int
+NetCrypto.KeyStoreCapability.MaxInputBytes.init -> void
+NetCrypto.KeyStoreCapability.Operation.get -> NetCrypto.KeyStoreOperation
+NetCrypto.KeyStoreCapability.Operation.init -> void
+NetCrypto.KeyStoreCapabilitySet
+NetCrypto.KeyStoreCapabilitySet.Capabilities.get -> System.Collections.Generic.IReadOnlyList<NetCrypto.KeyStoreCapability!>!
+NetCrypto.KeyStoreCapabilitySet.Capabilities.init -> void
+NetCrypto.KeyStoreCapabilitySet.Equals(NetCrypto.KeyStoreCapabilitySet? other) -> bool
+NetCrypto.KeyStoreCapabilitySet.Find(NetCrypto.KeyType keyType, NetCrypto.KeyStoreOperation operation, NetCrypto.KeyStoreAlgorithmId? algorithm = null) -> NetCrypto.KeyStoreCapability?
+NetCrypto.KeyStoreCapabilitySet.KeyStoreCapabilitySet(string! Revision, System.Collections.Generic.IReadOnlyList<NetCrypto.KeyStoreCapability!>! Capabilities) -> void
+NetCrypto.KeyStoreCapabilitySet.Revision.get -> string!
+NetCrypto.KeyStoreCapabilitySet.Revision.init -> void
+NetCrypto.KeyStoreError
+NetCrypto.KeyStoreError.AccessDenied = 2 -> NetCrypto.KeyStoreError
+NetCrypto.KeyStoreError.IdempotencyConflict = 1 -> NetCrypto.KeyStoreError
+NetCrypto.KeyStoreError.OutcomeUnknown = 5 -> NetCrypto.KeyStoreError
+NetCrypto.KeyStoreError.Throttled = 3 -> NetCrypto.KeyStoreError
+NetCrypto.KeyStoreError.Unavailable = 4 -> NetCrypto.KeyStoreError
+NetCrypto.KeyStoreError.Unsupported = 0 -> NetCrypto.KeyStoreError
+NetCrypto.KeyStoreException
+NetCrypto.KeyStoreException.Error.get -> NetCrypto.KeyStoreError
+NetCrypto.KeyStoreException.KeyStoreException(NetCrypto.KeyStoreError error, string! message) -> void
+NetCrypto.KeyStoreException.KeyStoreException(NetCrypto.KeyStoreError error, string! message, System.Exception? innerException) -> void
+NetCrypto.KeyStoreException.KeyStoreException(NetCrypto.KeyStoreError error, string! message, System.TimeSpan? retryAfter, System.Exception? innerException) -> void
+NetCrypto.KeyStoreException.RetryAfter.get -> System.TimeSpan?
+NetCrypto.KeyStoreNamespaceId
+NetCrypto.KeyStoreNamespaceId.KeyStoreNamespaceId() -> void
+NetCrypto.KeyStoreNamespaceId.KeyStoreNamespaceId(string! Value) -> void
+NetCrypto.KeyStoreNamespaceId.Value.get -> string!
+NetCrypto.KeyStoreNamespaceId.Value.init -> void
+NetCrypto.KeyStoreOperation
+NetCrypto.KeyStoreOperation.BbsSign = 4 -> NetCrypto.KeyStoreOperation
+NetCrypto.KeyStoreOperation.Generate = 0 -> NetCrypto.KeyStoreOperation
+NetCrypto.KeyStoreOperation.Import = 1 -> NetCrypto.KeyStoreOperation
+NetCrypto.KeyStoreOperation.KeyAgreement = 3 -> NetCrypto.KeyStoreOperation
+NetCrypto.KeyStoreOperation.Sign = 2 -> NetCrypto.KeyStoreOperation
 NetCrypto.KeyStoreSigner
 NetCrypto.KeyStoreSigner.KeyStoreSigner(NetCrypto.IKeyStore! store, string! alias, NetCrypto.KeyType keyType, byte[]! publicKey) -> void
 NetCrypto.KeyStoreSigner.KeyType.get -> NetCrypto.KeyType
@@ -150,11 +336,18 @@ NetCrypto.StoredKeyInfo
 NetCrypto.StoredKeyInfo.Alias.get -> string!
 NetCrypto.StoredKeyInfo.Alias.init -> void
 NetCrypto.StoredKeyInfo.Equals(NetCrypto.StoredKeyInfo? other) -> bool
+NetCrypto.StoredKeyInfo.InstanceId.get -> NetCrypto.KeyInstanceId?
+NetCrypto.StoredKeyInfo.InstanceId.init -> void
 NetCrypto.StoredKeyInfo.KeyType.get -> NetCrypto.KeyType
 NetCrypto.StoredKeyInfo.KeyType.init -> void
 NetCrypto.StoredKeyInfo.MultibasePublicKey.get -> string!
 NetCrypto.StoredKeyInfo.PublicKey.get -> byte[]!
 NetCrypto.StoredKeyInfo.PublicKey.init -> void
+NetCrypto.TransferableKeyMaterial
+NetCrypto.TransferableKeyMaterial.Dispose() -> void
+NetCrypto.TransferableKeyMaterial.IsConsumed.get -> bool
+NetCrypto.TransferableKeyMaterial.KeyType.get -> NetCrypto.KeyType
+NetCrypto.TransferableKeyMaterial.PublicKey.get -> byte[]!
 NetCrypto.XChaCha20Poly1305Cipher
 const NetCrypto.AesCbcHmacCipher.IvSizeBytes = 16 -> int
 const NetCrypto.AesCbcHmacCipher.KeySizeBytes = 64 -> int
@@ -165,7 +358,6 @@ const NetCrypto.AesGcmCipher.TagSizeBytes = 16 -> int
 const NetCrypto.XChaCha20Poly1305Cipher.KeySizeBytes = 32 -> int
 const NetCrypto.XChaCha20Poly1305Cipher.NonceSizeBytes = 24 -> int
 const NetCrypto.XChaCha20Poly1305Cipher.TagSizeBytes = 16 -> int
-override NetCrypto.StoredKeyInfo.GetHashCode() -> int
 static NetCrypto.AesCbcHmacCipher.Decrypt(System.ReadOnlySpan<byte> key, System.ReadOnlySpan<byte> iv, System.ReadOnlySpan<byte> ciphertext, System.ReadOnlySpan<byte> tag, System.ReadOnlySpan<byte> associatedData = default(System.ReadOnlySpan<byte>)) -> byte[]!
 static NetCrypto.AesCbcHmacCipher.Encrypt(System.ReadOnlySpan<byte> key, System.ReadOnlySpan<byte> iv, System.ReadOnlySpan<byte> plaintext, System.ReadOnlySpan<byte> associatedData = default(System.ReadOnlySpan<byte>)) -> (byte[]! Ciphertext, byte[]! Tag)
 static NetCrypto.AesGcmCipher.Decrypt(System.ReadOnlySpan<byte> key, System.ReadOnlySpan<byte> nonce, System.ReadOnlySpan<byte> ciphertext, System.ReadOnlySpan<byte> tag, System.ReadOnlySpan<byte> associatedData = default(System.ReadOnlySpan<byte>)) -> byte[]!
@@ -191,6 +383,21 @@ static NetCrypto.JwkConverter.ToPublicJwk(NetCrypto.KeyPair! keyPair) -> Microso
 static NetCrypto.JwkConverter.ToPublicJwk(NetCrypto.KeyType keyType, byte[]! publicKey) -> Microsoft.IdentityModel.Tokens.JsonWebKey!
 static NetCrypto.Keccak256.Hash(System.ReadOnlySpan<byte> data) -> byte[]!
 static NetCrypto.Keccak256.TryHash(System.ReadOnlySpan<byte> data, System.Span<byte> destination, out int bytesWritten) -> bool
+static NetCrypto.KeyStoreAlgorithms.BbsBls12381Sha256.get -> NetCrypto.KeyStoreAlgorithmId
+static NetCrypto.KeyStoreAlgorithms.Bls12381G1Basic.get -> NetCrypto.KeyStoreAlgorithmId
+static NetCrypto.KeyStoreAlgorithms.Bls12381G2Basic.get -> NetCrypto.KeyStoreAlgorithmId
+static NetCrypto.KeyStoreAlgorithms.EcdhP256.get -> NetCrypto.KeyStoreAlgorithmId
+static NetCrypto.KeyStoreAlgorithms.EcdhP384.get -> NetCrypto.KeyStoreAlgorithmId
+static NetCrypto.KeyStoreAlgorithms.EcdhP521.get -> NetCrypto.KeyStoreAlgorithmId
+static NetCrypto.KeyStoreAlgorithms.EcdhX25519.get -> NetCrypto.KeyStoreAlgorithmId
+static NetCrypto.KeyStoreAlgorithms.Ed25519.get -> NetCrypto.KeyStoreAlgorithmId
+static NetCrypto.KeyStoreAlgorithms.Es256Der.get -> NetCrypto.KeyStoreAlgorithmId
+static NetCrypto.KeyStoreAlgorithms.Es256K.get -> NetCrypto.KeyStoreAlgorithmId
+static NetCrypto.KeyStoreAlgorithms.Es256P1363.get -> NetCrypto.KeyStoreAlgorithmId
+static NetCrypto.KeyStoreAlgorithms.Es384Der.get -> NetCrypto.KeyStoreAlgorithmId
+static NetCrypto.KeyStoreAlgorithms.Es384P1363.get -> NetCrypto.KeyStoreAlgorithmId
+static NetCrypto.KeyStoreAlgorithms.Es512Der.get -> NetCrypto.KeyStoreAlgorithmId
+static NetCrypto.KeyStoreAlgorithms.Es512P1363.get -> NetCrypto.KeyStoreAlgorithmId
 static NetCrypto.KeyTypeExtensions.FromMulticodec(ulong codec) -> NetCrypto.KeyType
 static NetCrypto.KeyTypeExtensions.GetMulticodec(this NetCrypto.KeyType keyType) -> ulong
 static NetCrypto.KeyTypeExtensions.IsValidEcPoint(this NetCrypto.KeyType keyType, byte[]! rawKey) -> bool
@@ -200,5 +407,13 @@ static NetCrypto.KeyTypeExtensions.ToUncompressed(this NetCrypto.KeyType keyType
 static NetCrypto.Secp256k1Recoverable.RecoverPublicKey(System.ReadOnlySpan<byte> digest32, System.ReadOnlySpan<byte> signature64, int recoveryId, bool compressed = false) -> byte[]!
 static NetCrypto.Secp256k1Recoverable.Sign(System.ReadOnlySpan<byte> privateKey, System.ReadOnlySpan<byte> digest32) -> (byte[]! Signature64, int RecoveryId)
 static NetCrypto.ServiceCollectionExtensions.AddNetCrypto(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+static NetCrypto.TransferableKeyMaterial.FromKeyPair(NetCrypto.KeyPair! keyPair) -> NetCrypto.TransferableKeyMaterial!
+static NetCrypto.TransferableKeyMaterial.FromRawKey(NetCrypto.KeyType keyType, System.ReadOnlySpan<byte> publicKey, System.ReadOnlySpan<byte> privateKey) -> NetCrypto.TransferableKeyMaterial!
 static NetCrypto.XChaCha20Poly1305Cipher.Decrypt(System.ReadOnlySpan<byte> key, System.ReadOnlySpan<byte> nonce, System.ReadOnlySpan<byte> ciphertext, System.ReadOnlySpan<byte> tag, System.ReadOnlySpan<byte> associatedData = default(System.ReadOnlySpan<byte>)) -> byte[]!
 static NetCrypto.XChaCha20Poly1305Cipher.Encrypt(System.ReadOnlySpan<byte> key, System.ReadOnlySpan<byte> nonce, System.ReadOnlySpan<byte> plaintext, System.ReadOnlySpan<byte> associatedData = default(System.ReadOnlySpan<byte>)) -> (byte[]! Ciphertext, byte[]! Tag)
+override NetCrypto.KeyInstanceId.ToString() -> string!
+override NetCrypto.KeyOperationId.ToString() -> string!
+override NetCrypto.KeyStoreAlgorithmId.ToString() -> string!
+override NetCrypto.KeyStoreCapabilitySet.GetHashCode() -> int
+override NetCrypto.KeyStoreNamespaceId.ToString() -> string!
+override NetCrypto.StoredKeyInfo.GetHashCode() -> int

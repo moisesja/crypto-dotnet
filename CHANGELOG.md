@@ -5,6 +5,164 @@ All notable changes to **NetCrypto** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-08-13
+
+### Added
+
+- **`ICapableKeyStore`** — the contract a production custody backend (cloud KMS, HSM partition,
+  encrypted software keystore) needs in order to sit behind `IKeyStore` without its consumer
+  inventing a parallel signer surface downstream. Ships as a **derived** interface plus new
+  types: `IKeyStore` gains no member, so every existing store implementation, `ISigner`,
+  `KeyStoreSigner`, and `InMemoryKeyStore` caller stays source- and binary-compatible. It adds no
+  export operation anywhere, no KDF, and no protocol semantics. (#26)
+  - **Capability discovery** — `IKeyStoreCapabilityProvider.GetCapabilitiesAsync` returning a
+    deeply immutable `KeyStoreCapabilitySet` of `(KeyType, KeyStoreOperation, algorithm,
+    MaxInputBytes)` tuples, with a `Revision` stable for the store instance's lifetime. Backends
+    differ by configuration — an HSM partition without BLS, a KMS without X25519 — and without
+    discovery the first real operation is the probe. This generalizes the one capability probe
+    NetCrypto already had, `IBbsCryptoProvider.IsAvailable`. Honesty is bidirectional: every
+    advertised tuple works, and every unadvertised one fails with `Unsupported` *before* key
+    creation or signing, never as a silent downgrade.
+  - **`KeyInstanceId`** — immutable, never-reused identity for a key instance, carried on
+    `StoredKeyInfo` (optional, `null` on legacy paths) and on every capable result. Aliases are
+    reusable and KMS aliases can be rebound; a stale reference now fails instead of silently
+    signing under whatever key answers to the name. This generalizes to the whole surface the
+    alias-rebinding defense `KeyStoreSigner` could only apply on the recoverable path (#21),
+    where a signature happens to encode its own signer.
+  - **`KeyStoreNamespaceId`** — least-privilege scoping enforced on every member, including the
+    inherited `IKeyStore` ones, so multi-tenant scoping is a contract property rather than an
+    alias-prefix convention. Naming is not authorization.
+  - **Durably idempotent mutations** — `GenerateAsync`/`ImportAsync`/`DeleteAsync` over
+    `KeyGenerateRequest`/`KeyImportRequest`/`KeyDeleteRequest`, identified by
+    `(NamespaceId, KeyMutationKind, KeyOperationId)`, plus `GetMutationOutcomeAsync` returning a
+    durable `KeyMutationOutcome` receipt. A retry after a lost acknowledgement replays instead of
+    double-creating; the same id with a different request is `IdempotencyConflict` rather than a
+    silent overwrite. The canonical request fingerprint is length-prefixed, so no two distinct
+    requests can collide.
+  - **Algorithm- and encoding-bearing operations** — `SignAsync(KeySignRequest)` and
+    `DeriveSharedSecretAsync(KeyAgreementRequest)` select a `KeyStoreAlgorithmId` from the
+    `KeyStoreAlgorithms` table (`ed25519`, `es256-der`/`es256-p1363`, `es384-*`, `es512-*`,
+    `es256k`, `bls12381g{1,2}-basic`, `ecdh-*`, `bbs-bls12381-sha256`). The identifier binds the
+    observable encoding, which is what finally makes the existing `EcdsaSignatureFormat`
+    distinction reachable for a key that never leaves its store — JOSE/JWS/COSE/WebAuthn mandate
+    IEEE P1363, X.509/CMS use DER, and the by-reference path previously could not ask for either.
+  - **`SignBbsAsync`** — BBS multi-message signing with a store-held BLS12-381 G2 key. The same
+    shape #21 fixed for recoverable ECDSA: the primitive takes a raw private scalar, which
+    excludes exactly the keys a custody store exists to hold. Advertised only where the platform
+    can really do it; plain BLS signing is never advertised or accepted as BBS.
+  - **`TransferableKeyMaterial`** — a one-way, single-use import owner with **no** private-key
+    read, format, or export surface, holding the secret in a pinned buffer (the #17 zeroization
+    infrastructure). Handing a `KeyPair` to a store leaves the caller with a live export surface,
+    since `KeyPair.PrivateKey` clones the secret on every read; this closes that. Read exactly
+    once at acceptance, then zeroized and latched permanently unreadable; a failure *before*
+    acceptance leaves it usable for exactly one retry; a recognized replay destroys it without
+    reading it, so an `OutcomeUnknown` import is reconciled through the receipt rather than by
+    resubmitting key material.
+  - **`KeyStoreException` / `KeyStoreError`** — the portable taxonomy (`Unsupported`,
+    `IdempotencyConflict`, `AccessDenied`, `Throttled`, `Unavailable`, `OutcomeUnknown`) with an
+    optional `RetryAfter`, so callers can back off, fail over, page an operator, or reconcile
+    without catching vendor SDK exception types. No backend, native, or platform exception type
+    escapes a capable-store member; the original is preserved as `InnerException`. Argument
+    faults stay parameter-named `ArgumentException` (NFR-3), and the legacy `IKeyStore` members
+    keep their documented BCL exceptions unchanged.
+- **`CapableInMemoryKeyStore` + `InMemoryKeyStoreBackend`** — the reference implementation and
+  contract oracle, a **sibling** of `InMemoryKeyStore` (which is untouched). The backend is
+  separate because the two properties it underwrites are only meaningful across instances:
+  namespace isolation is a claim about two stores over *one* backend, and receipt durability is a
+  claim about a receipt outliving the store instance that wrote it.
+
+### Fixed
+
+- **`InMemoryKeyStore.DeriveSharedSecretAsync` no longer leaks a platform
+  `CryptographicException`** for a peer public key that is the right length but unusable — an
+  off-curve point, a low-order X25519 point, a compressed point with no solution on the curve.
+  These now surface as the parameter-named `ArgumentException("peerPublicKey")` the method's
+  contract already promised, with the platform exception preserved as `InnerException`. NFR-3
+  reserves `CryptographicException` for genuine crypto failures and forbids it doubling as the
+  catch-all for malformed input; the wrong-*length* case was already correct, so only invalid
+  input behavior changes and no valid-input behavior is affected. Found by the issue #26
+  input-validation sweep while auditing the new store's inherited surface.
+
+### Security hardening
+
+Four integrity gaps in the new surface, found by the issue #26 adversarial pass and NFR-3 sweep
+before release. Each is recorded here because the shape looked correct without them, and a
+downstream backend author would inherit the same mistakes:
+
+- **Provider output is verified against the key it claims to speak for**, not merely
+  length-checked. A hostile or buggy `ICryptoProvider` could otherwise return a well-formed
+  signature made under a *different* key — or, for DER, any bytes at all — and the store would
+  hand it to the caller. Verification runs through an internal `DefaultCryptoProvider` rather than
+  the injected one, so a provider cannot both forge a signature and bless it. This is NFR-6.2
+  applied to the whole capable surface, generalizing what `KeyStoreSigner` already does on the
+  recoverable path.
+- **Identifiers and aliases must be well-formed UTF-16.** `Encoding.UTF8` uses replacement
+  fallback, so every unpaired surrogate — and U+FFFD itself — encodes to the same three bytes. Two
+  distinct mutation requests could therefore share one fingerprint, and the second would silently
+  *replay* the first, returning a success receipt naming an alias the caller never asked for.
+  Well-formed surrogate pairs remain legal.
+- **Import proves the transferred public key belongs to the transferred private key**, and
+  `TransferableKeyMaterial.FromRawKey` rejects wrong-length material at construction. Without
+  this, `StoredKeyInfo.PublicKey` — the verification identity downstream DID/VC code publishes —
+  was attacker-chosen, and a 1-byte "P-256 key pair" could cross the custody boundary and be
+  published as real, failing only at first use.
+- **A provider cannot re-enter the store.** `Monitor` is reentrant, so a provider callback
+  previously walked straight through the backend lock; a nested delete then zeroized the pinned
+  buffer that the in-flight private-key borrow was still reading, and the store returned a
+  signature for a key it had just destroyed.
+- Also: a caller-supplied `Messages` list whose enumerator and indexer disagree can no longer sign
+  past `MaxInputBytes`; a `with` expression can no longer install a value a constructor would have
+  reject (validation moved onto the `init` accessors, which `with` does call); a
+  `CryptographicException` over caller-supplied key material is reported as a parameter fault
+  rather than a retryable `Unavailable`; a provider cannot fabricate a cancellation the caller
+  never requested; and a provider-internal argument fault is no longer blamed on the caller.
+
+Further gaps found by PR #27 review, fixed before release with regression tests proven
+genuine by reverting each guard:
+
+- **BBS output no longer self-certifies.** The return-path check previously asked the injected
+  provider to verify its own signature, so a provider lying in both `Sign` and `Verify` passed 80
+  bytes of noise. The reference store now advertises BBS only when both its configured producer
+  and the independent in-repo `DefaultBbsCryptoProvider` verifier are available; there is no
+  same-provider fallback in the supported no-native mode. The producer also receives a separate
+  deep copy of the messages, so it cannot rewrite the mutable `byte[]` elements that the
+  independent verifier uses as evidence.
+- **Generate/import no longer leak backend exceptions by type.** Generator-originated
+  `ObjectDisposedException`, fabricated `OperationCanceledException`, internal
+  `ArgumentException`, native load failures, and other backend faults now surface as
+  `KeyStoreException(Unavailable)` with the original as `InnerException`. Only a private-key
+  rejection explicitly naming the forwarded `privateKey` remains a caller argument fault.
+- **Generator output is checked before commit.** A same-type `KeyPair` can still pair key A's
+  public bytes with key B's private bytes. Generate and import now independently re-derive the
+  public half from the returned private half and reject a mismatch as `Unavailable`, before any
+  key or mutation receipt is stored.
+- **`KeyStoreCapability` preserves its cross-field invariant under `with`.** Mutating `Operation`
+  alone could keep an algorithm on a Generate capability (or strip the one Sign requires); the
+  `Operation` accessor now re-validates the pairing. Changing operation and algorithm across that
+  divide requires constructing a new capability.
+- **BBS bounds the message count (4096 in the reference store) and byte total before copying.**
+  `Messages.Count` is untrusted and `MaxInputBytes` cannot limit a count of zero-byte messages, so
+  a list reporting `int.MaxValue` produced `OutOfMemoryException` at the snapshot allocation.
+  Absurd counts — negative included — now fail as parameter-named argument faults. Oversized
+  headers/messages stop before copying, and a list whose indexer cannot honor its own `Count`
+  becomes `ArgumentException("request")` rather than leaking `IndexOutOfRangeException`.
+
+Plus the two notes from the approving review: the legacy `SignAsync` overload's XML docs now state
+it carries no return-path identity check and point at `SignAsync(KeySignRequest)`, and the legacy
+`GenerateAsync` enters the reentrancy scope before invoking the key generator, matching the
+request-based path.
+
+### Documentation
+
+- **README gains an "Implementing a capable key store" section** — the ten contract rules and the
+  algorithm-identifier table, written for authors of downstream backend adapters, since the shape
+  alone does not communicate the contract.
+- **New sample** `NetCrypto.Samples.CapableKeyStore` (discovery → validate → sign, plus namespace
+  scoping, idempotent retry, instance-id rebind rejection, import ownership, and BBS by
+  reference), added to the samples index. It exits 0 with and without the native BBS library.
+- **PRD `FR-7b`** records the full normative contract and its acceptance criteria, alongside the
+  concept-to-FR traceability row; `netcrypto-concept.md` §2.6 notes the custody boundary.
+
 ## [1.5.0] - 2026-08-05
 
 ### Fixed
@@ -271,7 +429,8 @@ library stack behind stable interfaces, so no domain library binds directly to a
 - **Native BBS distribution** for five RIDs (`osx-arm64`, `osx-x64`, `linux-x64`, `linux-arm64`,
   `win-x64`), packed into the single NuGet package; the repository stays source-only.
 
-[Unreleased]: https://github.com/moisesja/crypto-dotnet/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/moisesja/crypto-dotnet/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.2.0...v1.3.0
