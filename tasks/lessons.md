@@ -208,5 +208,12 @@ handling and missed the boundary; this one certified output *shape* and missed o
 One further turn of the screw the pass forced: verify through an internal provider, not the
 injected one. A provider that forged the signature will happily verify it too.
 
+**Addendum (PR #27 review):** I then applied that rule to ECDSA and exempted BBS with a written
+justification — "no independent in-repo verifier exists" — while `DefaultBbsCryptoProvider`,
+the independent verifier, sat in the same file's imports. The review reproduced the resulting
+self-certification with a provider lying in both `Sign` and `Verify`. A claimed limitation is a
+checkable fact, not a doc sentence: before writing "X does not exist, so the weaker guarantee
+is documented", search for X.
+
 → Rule: NFR-6, FR-7b rule 11; [`adversarial-pass`](../.claude/skills/adversarial-pass/SKILL.md)
 ("hostile or buggy backend output"). See [[L9]].
