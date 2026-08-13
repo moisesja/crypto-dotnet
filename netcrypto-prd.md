@@ -285,9 +285,12 @@ precisely so that it can — but must never reuse one of these for different obs
 9. **Bounds are finite.** Every capability carries a positive finite `MaxInputBytes` — `null` and
    `0` are not available to mean "unbounded". What it measures is per operation: alias UTF-8
    length for Generate/Import, `Data` for Sign, `PeerPublicKey` for KeyAgreement, and total
-   `Messages` + `Header` for BbsSign. Oversize input fails **before** backend work, as a
-   parameter-named `ArgumentException` (NFR-3 governs shape faults; the taxonomy governs backend
-   conditions).
+   `Messages` + `Header` for BbsSign. BBS additionally bounds the **message count** (the
+   reference store: 4096), because `Messages` is a caller-supplied list whose `Count` is
+   untrusted and a byte bound cannot limit a count of zero-byte messages — an absurd count must
+   fail as an argument fault, never as an `OutOfMemoryException` at the snapshot allocation.
+   Oversize input fails **before** backend work, as a parameter-named `ArgumentException` (NFR-3
+   governs shape faults; the taxonomy governs backend conditions).
 10. **Errors are portable.** Routed operations surface `KeyStoreException` with the taxonomy
     above (plus `RetryAfter` where the backend communicated one); **no vendor SDK, native, or
     platform exception type leaks**, and the original is preserved as `InnerException`. Argument
@@ -307,10 +310,12 @@ correct):
 11. **Produced output must speak for the advertised key.** Length is not identity. Before any
     signature reaches the caller, the store verifies it under the public key it itself advertises
     for that key instance, through a verifier **independent of the injected provider** — otherwise
-    a provider that forged the signature would also bless it. Failure is `Unavailable`. (An
-    independent verifier does not exist for BBS, so that path necessarily re-asks its provider;
-    the weaker guarantee is documented rather than implied. Key agreement has no verifier at all
-    and is length-checked only.)
+    a provider that forged the signature would also bless it. Failure is `Unavailable`. This
+    covers BBS too: verification runs through the in-repo `DefaultBbsCryptoProvider` whenever the
+    native suite is loadable, and only falls back to asking the producing provider when it is not
+    (a managed third-party BBS implementation on a platform without the native library) — that
+    residual weakness is documented rather than implied away. (Key agreement has no verifier at
+    all and is length-checked only.)
 12. **Identifiers and aliases must be well-formed UTF-16.** `Encoding.UTF8` uses replacement
     fallback, so every unpaired surrogate — and U+FFFD itself — encodes to the same three bytes.
     Any identifier that reaches a UTF-8 encoding (the mutation fingerprint, a backend's wire
@@ -383,7 +388,12 @@ composition. Paged `ListAsync` is out of scope and tracked separately.
 - [ ] An unpaired-surrogate alias or identifier is refused with a parameter name, and cannot
   replay a mutation issued under a different one; a well-formed surrogate pair still works.
 - [ ] A `Messages` list whose enumerator and indexer disagree cannot sign past `MaxInputBytes`
-  (asserted with a counting provider).
+  (asserted with a counting provider); one reporting an absurd `Count` (negative or
+  `int.MaxValue`) fails as a parameter fault before any allocation.
+- [ ] A BBS provider lying in **both** `Sign` and `Verify` cannot bless its own forgery (native
+  suite present); an import whose key generator fails with a backend type surfaces as
+  `Unavailable`, never the raw type; `with { Operation = … }` cannot produce an inconsistent
+  operation–algorithm pair.
 - [ ] An import whose public key does not belong to its private key is rejected before commit, and
   wrong-length material is refused at construction; an honest import still round-trips.
 - [ ] A provider that calls back into the store on the same thread is refused rather than allowed

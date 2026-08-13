@@ -63,6 +63,7 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
     internal const int MaxSignInputBytes = 1024 * 1024;
     internal const int MaxAgreementInputBytes = 256;
     internal const int MaxBbsInputBytes = 1024 * 1024;
+    internal const int MaxBbsMessageCount = 4096;
 
     // Two snapshots, because the only thing that varies is whether this process can do BBS —
     // and IBbsCryptoProvider.IsAvailable is fixed for the process lifetime, which is what makes
@@ -270,32 +271,23 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
             // Acceptance. From here the caller's material is spent, whatever happens next —
             // including the mismatch below, which is deliberate: the store has seen the secret,
             // so handing the caller a second chance with it would be the wrong trade.
-            var keyPair = material.Consume((type, publicBytes, privateBytes) =>
+            KeyPair keyPair;
+            try
             {
-                // Derive the public key from the secret rather than believing the caller's copy.
-                // StoredKeyInfo.PublicKey is the identity downstream DID/VC code publishes and
-                // verifies against; an unchecked import lets it be set to a key unrelated to the
-                // one that will actually sign.
-                KeyPair derived;
-                try
-                {
-                    derived = _keyGenerator.FromPrivateKey(type, privateBytes);
-                }
-                catch (ArgumentException ex)
-                {
-                    throw new ArgumentException(
-                        $"The transferred material is not a valid {type} private key.", nameof(request), ex);
-                }
-
-                if (derived.PublicKey.AsSpan().SequenceEqual(publicBytes))
-                    return derived;
-
-                derived.Dispose();
-                throw new ArgumentException(
-                    "The transferred public key does not belong to the transferred private key.", nameof(request));
-            });
+                keyPair = ConsumeAndDerive(material, nameof(request));
+            }
+            catch (Exception ex) when (ex is not (ArgumentException or ObjectDisposedException or KeyStoreException))
+            {
+                // FromPrivateKey runs inside the reader, and only its ArgumentException is mapped
+                // there. Anything else a key generator can throw — a missing HSM driver, a native
+                // load failure — is a backend condition and must not escape as a backend type
+                // (rule 10). The material is already spent; the receipt of that is IsConsumed.
+                throw new KeyStoreException(
+                    KeyStoreError.Unavailable, "The key generator failed while ingesting the imported material.", ex);
+            }
 
             var instanceId = NewInstanceId();
+
             var info = NewInfo(request.Alias, keyPair, instanceId);
             var outcome = new KeyImportedOutcome(request.OperationId, _timeProvider.GetUtcNow(), info, instanceId);
 
@@ -440,10 +432,18 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
 
         // Read Count exactly once, and check it here — before the capability lookup, so an
         // argument fault stays an argument fault rather than being masked by "unsupported" on a
-        // platform that cannot do BBS at all (NFR-3: validate the caller's input first).
+        // platform that cannot do BBS at all (NFR-3: validate the caller's input first). The
+        // count needs its own bound: Messages is a caller-supplied list whose Count is untrusted
+        // (it may lie in either direction), the snapshot allocates from it, and MaxInputBytes
+        // cannot help because a count of zero-byte messages stays "within" any byte bound — an
+        // absurd Count must fail here, never as an OutOfMemoryException at the allocation.
         var count = request.Messages.Count;
-        if (count == 0)
+        if (count <= 0)
             throw new ArgumentException("A BBS signature requires at least one message.", nameof(request));
+        if (count > MaxBbsMessageCount)
+            throw new ArgumentException(
+                $"A BBS signature covers at most {MaxBbsMessageCount} messages in this store, got {count}.",
+                nameof(request));
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         var spec = ResolveAlgorithm(request.Algorithm, KeyStoreOperation.BbsSign, nameof(request),
@@ -485,13 +485,18 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
 
             var checkedSignature = CheckedResult(signature, BbsSignatureLength, "BBS signature");
 
-            // NFR-6.2 for the BBS path. Unlike the ECDSA/EdDSA paths there is no independent
-            // in-repo verifier to fall back on, so this necessarily asks the same provider —
-            // weaker, but it still catches a provider that returns well-formed noise.
+            // NFR-6.2 for the BBS path, with the same trust separation as the ECDSA path: a
+            // provider that forged the signature will happily verify it too, so the check runs
+            // through the in-repo DefaultBbsCryptoProvider whenever the native suite is
+            // loadable. Only when it is not — a managed third-party BBS implementation on a
+            // platform without the native library — does this fall back to asking the producing
+            // provider, which still catches well-formed noise but not a provider lying in both
+            // halves; that residual weakness is documented rather than implied away.
+            var verifier = BbsVerificationProvider.IsAvailable ? BbsVerificationProvider : bbs;
             bool verified;
             try
             {
-                verified = bbs.Verify(entry.Info.PublicKey, checkedSignature, messages, header);
+                verified = verifier.Verify(entry.Info.PublicKey, checkedSignature, messages, header);
             }
             catch (Exception ex)
             {
@@ -565,8 +570,10 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
         RequireDefinedKeyType(keyType, nameof(keyType));
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        var keyPair = _keyGenerator.Generate(keyType);
+        // Scope entered before the generator runs, matching the request-based path — a
+        // reentrant key generator is refused on both.
         using var operation = OperationScope.Enter();
+        var keyPair = _keyGenerator.Generate(keyType);
         lock (_backend.Gate)
         {
             ObjectDisposedException.ThrowIf(_backend.Disposed, this);
@@ -628,8 +635,11 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
     /// <inheritdoc />
     /// <remarks>
     /// Signs with the algorithm bound to the key type and, for the NIST curves, the DER default
-    /// — unchanged from <see cref="InMemoryKeyStore"/>. To choose the encoding, use
-    /// <see cref="SignAsync(KeySignRequest, CancellationToken)"/>.
+    /// — unchanged from <see cref="InMemoryKeyStore"/>, which also means <b>no return-path
+    /// identity check</b>: this overload does not verify the produced signature against the
+    /// advertised public key, and it carries no <see cref="KeyInstanceId"/> guard. Use
+    /// <see cref="SignAsync(KeySignRequest, CancellationToken)"/> to choose the encoding and get
+    /// both integrity checks.
     /// </remarks>
     public Task<byte[]> SignAsync(string alias, ReadOnlyMemory<byte> data, CancellationToken ct = default)
     {
@@ -792,9 +802,10 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
 
     private const int BbsSignatureLength = 80;
 
-    // Verification oracle for the NFR-6 return-path check. Deliberately NOT the injected
-    // provider: a provider that produced a forged signature would happily verify it too.
+    // Verification oracles for the NFR-6 return-path check. Deliberately NOT the injected
+    // providers: a provider that produced a forged signature would happily verify it too.
     private static readonly DefaultCryptoProvider VerificationProvider = new();
+    private static readonly DefaultBbsCryptoProvider BbsVerificationProvider = new();
 
     // Replacement fallback would encode every unpaired surrogate — and U+FFFD itself — to the
     // same three bytes, so two distinct requests could share a fingerprint and one caller's
@@ -824,6 +835,36 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
         }
 
         public void Dispose() => _inOperation = false;
+    }
+
+    /// <summary>
+    /// The single read of transferred import material: derives the public key from the secret
+    /// rather than believing the caller's copy — <see cref="StoredKeyInfo.PublicKey"/> is the
+    /// identity downstream DID/VC code publishes and verifies against, and an unchecked import
+    /// lets it be set to a key unrelated to the one that will actually sign.
+    /// </summary>
+    private KeyPair ConsumeAndDerive(TransferableKeyMaterial material, string paramName)
+    {
+        return material.Consume((type, publicBytes, privateBytes) =>
+        {
+            KeyPair derived;
+            try
+            {
+                derived = _keyGenerator.FromPrivateKey(type, privateBytes);
+            }
+            catch (ArgumentException ex)
+            {
+                throw new ArgumentException(
+                    $"The transferred material is not a valid {type} private key.", paramName, ex);
+            }
+
+            if (derived.PublicKey.AsSpan().SequenceEqual(publicBytes))
+                return derived;
+
+            derived.Dispose();
+            throw new ArgumentException(
+                "The transferred public key does not belong to the transferred private key.", paramName);
+        });
     }
 
     private (string Namespace, string Alias) KeyKey(string alias) => (_namespaceId.Value, alias);

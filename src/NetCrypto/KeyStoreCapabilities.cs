@@ -87,10 +87,23 @@ public sealed record KeyStoreCapability(
     }
 
     /// <inheritdoc cref="KeyStoreCapability" />
+    /// <remarks>
+    /// The <c>init</c> accessor also re-validates the operation–algorithm pairing against the
+    /// current <see cref="Algorithm"/>: mutating the operation alone must not leave an algorithm
+    /// on a Generate/Import capability, or strip the one a Sign/KeyAgreement/BbsSign capability
+    /// requires. A consequence is that a <c>with</c> expression cannot change
+    /// <see cref="Operation"/> and <see cref="Algorithm"/> across that divide in either order —
+    /// construct a new capability instead.
+    /// </remarks>
     public KeyStoreOperation Operation
     {
         get => _operation;
-        init => _operation = RequireDefined(value);
+        init
+        {
+            var defined = RequireDefined(value);
+            ValidateAlgorithm(defined, _algorithm);
+            _operation = defined;
+        }
     }
 
     /// <inheritdoc cref="KeyStoreCapability" />

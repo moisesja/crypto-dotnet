@@ -227,9 +227,10 @@ public interface ICapableKeyStore : IKeyStore, IKeyStoreCapabilityProvider
     /// <paramref name="request"/> or its <see cref="KeyBbsSignRequest.Messages"/> is <c>null</c>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// The request's alias, instance id, or algorithm id is invalid, the message set is empty,
-    /// or the total message and header size exceeds the advertised
-    /// <see cref="KeyStoreCapability.MaxInputBytes"/>.
+    /// The request's alias, instance id, or algorithm id is invalid; the message set is empty or
+    /// exceeds the store's message-count bound (its <c>Count</c> is untrusted, and a byte bound
+    /// cannot limit a count of zero-byte messages); or the total message and header size exceeds
+    /// the advertised <see cref="KeyStoreCapability.MaxInputBytes"/>.
     /// </exception>
     /// <exception cref="KeyNotFoundException">
     /// The alias holds no key in this namespace, or holds a different key instance.

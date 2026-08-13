@@ -83,6 +83,182 @@ public class CapableKeyStoreHardeningTests
         (await act.Should().ThrowAsync<KeyStoreException>()).Which.Error.Should().Be(KeyStoreError.Unavailable);
     }
 
+    [Fact]
+    [Trait("Category", "NativeFFI")]
+    public async Task ABbsProviderThatLiesInBothSignAndVerify_CannotBlessItsOwnForgery()
+    {
+        // PR #27 review: the earlier regression's fake lied only in Sign and delegated Verify to
+        // the real provider — which is exactly the check a fully hostile provider defeats. The
+        // BBS output check must run through a verifier independent of the producing provider,
+        // mirroring what the ECDSA path already does.
+        var bbs = new HostileBbsProvider
+        {
+            SignReturns = () => Enumerable.Repeat((byte)0xAB, 80).ToArray(),
+            VerifyReturns = () => true,
+        };
+        using var backend = new InMemoryKeyStoreBackend();
+        using var store = CapableStoreTestSupport.NewStore(backend, "ns", bbs: bbs);
+        var (alias, instanceId) = await store.SeedAsync("issuer", KeyType.Bls12381G2);
+
+        var act = () => store.SignBbsAsync(new KeyBbsSignRequest(
+            alias, instanceId, KeyStoreAlgorithms.BbsBls12381Sha256,
+            [new ReadOnlyMemory<byte>("m"u8.ToArray())], ReadOnlyMemory<byte>.Empty));
+
+        (await act.Should().ThrowAsync<KeyStoreException>()).Which.Error.Should().Be(KeyStoreError.Unavailable);
+    }
+
+    [Fact]
+    public async Task AnImportWhoseGeneratorFailsWithABackendError_SurfacesAsUnavailable()
+    {
+        // PR #27 review: only ArgumentException from FromPrivateKey was mapped, so a generator
+        // failing with a backend/platform type escaped raw — after the material was consumed —
+        // contradicting "no backend exception type escapes a capable-store member".
+        using var backend = new InMemoryKeyStoreBackend();
+        using var store = new CapableInMemoryKeyStore(
+            backend, new KeyStoreNamespaceId("ns"), new BackendFailingGenerator(),
+            CapableStoreTestSupport.CryptoProvider);
+
+        using var pair = CapableStoreTestSupport.KeyGenerator.Generate(KeyType.Ed25519);
+        var material = TransferableKeyMaterial.FromKeyPair(pair);
+
+        var act = () => store.ImportAsync(new KeyImportRequest(CapableStoreTestSupport.NewOperationId(), "k", material));
+
+        var thrown = (await act.Should().ThrowAsync<KeyStoreException>()).Which;
+        thrown.Error.Should().Be(KeyStoreError.Unavailable);
+        thrown.InnerException.Should().BeOfType<DllNotFoundException>();
+        (await store.ListAsync()).Should().BeEmpty("a failed ingestion must not commit a key");
+        material.IsConsumed.Should().BeTrue("the store saw the secret, so the transfer is spent");
+    }
+
+    [Fact]
+    public void WithExpressions_CannotProduceAnInconsistentOperationAlgorithmPair()
+    {
+        // PR #27 review: per-field init validation misses the cross-field invariant — mutating
+        // Operation alone kept an algorithm on a Generate capability. Every publicly
+        // constructible state must satisfy "algorithm present iff the operation selects one".
+        var signing = new KeyStoreCapability(KeyType.P256, KeyStoreOperation.Sign, KeyStoreAlgorithms.Es256P1363, 1024);
+        var generate = new KeyStoreCapability(KeyType.P256, KeyStoreOperation.Generate, null, 512);
+
+        FluentActions.Invoking(() => signing with { Operation = KeyStoreOperation.Generate })
+            .Should().Throw<ArgumentException>("Generate selects no algorithm, and this one still carries es256-p1363");
+        FluentActions.Invoking(() => signing with { Operation = KeyStoreOperation.Import })
+            .Should().Throw<ArgumentException>();
+        FluentActions.Invoking(() => generate with { Operation = KeyStoreOperation.Sign })
+            .Should().Throw<ArgumentException>("Sign requires an algorithm, and this one has none");
+
+        // Same-family transitions keep the invariant and must keep working.
+        FluentActions.Invoking(() => signing with { Operation = KeyStoreOperation.KeyAgreement }).Should().NotThrow();
+        FluentActions.Invoking(() => generate with { Operation = KeyStoreOperation.Import }).Should().NotThrow();
+    }
+
+    [Theory]
+    [InlineData(int.MaxValue)]
+    [InlineData(-5)]
+    public async Task AMessageListReportingAnAbsurdCount_IsRejectedBeforeAnyAllocation(int reportedCount)
+    {
+        // PR #27 review: the snapshot allocated new byte[count][] straight from the untrusted
+        // Count. int.MaxValue produced OutOfMemoryException before any bound was consulted —
+        // MaxInputBytes cannot help, because a count of zero-byte messages stays "within" it.
+        var bbs = new HostileBbsProvider();
+        using var backend = new InMemoryKeyStoreBackend();
+        using var store = CapableStoreTestSupport.NewStore(backend, "ns", bbs: bbs);
+        var (alias, instanceId) = await store.SeedAsync("issuer", KeyType.Bls12381G2);
+
+        var act = () => store.SignBbsAsync(new KeyBbsSignRequest(
+            alias, instanceId, KeyStoreAlgorithms.BbsBls12381Sha256,
+            new CountLyingMessages(reportedCount), ReadOnlyMemory<byte>.Empty));
+
+        await act.Should().ThrowAsync<ArgumentException>().WithParameterName("request");
+        bbs.SignCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task TheMessageCountBound_IsInclusive()
+    {
+        using var store = CapableStoreTestSupport.NewBbsStore();
+        var (alias, instanceId) = await store.SeedAsync("issuer", KeyType.Bls12381G2);
+
+        var oneOver = Enumerable.Repeat(new ReadOnlyMemory<byte>("m"u8.ToArray()),
+            CapableInMemoryKeyStore.MaxBbsMessageCount + 1).ToList();
+
+        var act = () => store.SignBbsAsync(new KeyBbsSignRequest(
+            alias, instanceId, KeyStoreAlgorithms.BbsBls12381Sha256, oneOver, ReadOnlyMemory<byte>.Empty));
+
+        await act.Should().ThrowAsync<ArgumentException>().WithParameterName("request");
+    }
+
+    [Fact]
+    public async Task AReentrantKeyGenerator_IsRefusedOnTheLegacyGeneratePathToo()
+    {
+        // PR #27 LGTM note 2: the legacy overload generated the key before entering the
+        // operation scope, so a reentrant generator was caught on one path but not the other.
+        using var backend = new InMemoryKeyStoreBackend();
+        CapableInMemoryKeyStore store = null!;
+        using var _ = store = new CapableInMemoryKeyStore(
+            backend, new KeyStoreNamespaceId("ns"),
+            new ReentrantKeyGenerator(() => store.ListAsync().GetAwaiter().GetResult()),
+            CapableStoreTestSupport.CryptoProvider);
+
+        var act = () => store.GenerateAsync("k", KeyType.Ed25519);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .Where(e => e.Message.Contains("re-entered"));
+        (await store.ListAsync()).Should().BeEmpty();
+    }
+
+    private sealed class BackendFailingGenerator : IKeyGenerator
+    {
+        public KeyPair Generate(KeyType keyType) => throw new DllNotFoundException("the HSM driver is missing");
+
+        public KeyPair FromPrivateKey(KeyType keyType, ReadOnlySpan<byte> privateKey)
+            => throw new DllNotFoundException("the HSM driver is missing");
+
+        public PublicKeyReference FromPublicKey(KeyType keyType, ReadOnlySpan<byte> publicKey)
+            => throw new DllNotFoundException("the HSM driver is missing");
+
+        public KeyPair DeriveX25519FromEd25519(KeyPair ed25519KeyPair)
+            => throw new DllNotFoundException("the HSM driver is missing");
+
+        public PublicKeyReference DeriveX25519PublicKeyFromEd25519(ReadOnlySpan<byte> ed25519PublicKey)
+            => throw new DllNotFoundException("the HSM driver is missing");
+    }
+
+    private sealed class ReentrantKeyGenerator(Action reenter) : IKeyGenerator
+    {
+        public KeyPair Generate(KeyType keyType)
+        {
+            reenter();
+            return CapableStoreTestSupport.KeyGenerator.Generate(keyType);
+        }
+
+        public KeyPair FromPrivateKey(KeyType keyType, ReadOnlySpan<byte> privateKey)
+            => CapableStoreTestSupport.KeyGenerator.FromPrivateKey(keyType, privateKey);
+
+        public PublicKeyReference FromPublicKey(KeyType keyType, ReadOnlySpan<byte> publicKey)
+            => CapableStoreTestSupport.KeyGenerator.FromPublicKey(keyType, publicKey);
+
+        public KeyPair DeriveX25519FromEd25519(KeyPair ed25519KeyPair)
+            => CapableStoreTestSupport.KeyGenerator.DeriveX25519FromEd25519(ed25519KeyPair);
+
+        public PublicKeyReference DeriveX25519PublicKeyFromEd25519(ReadOnlySpan<byte> ed25519PublicKey)
+            => CapableStoreTestSupport.KeyGenerator.DeriveX25519PublicKeyFromEd25519(ed25519PublicKey);
+    }
+
+    /// <summary>A list that lies about its Count; touching any element would be the failure.</summary>
+    private sealed class CountLyingMessages(int reportedCount) : IReadOnlyList<ReadOnlyMemory<byte>>
+    {
+        public int Count => reportedCount;
+
+        public ReadOnlyMemory<byte> this[int index] => ReadOnlyMemory<byte>.Empty;
+
+        public IEnumerator<ReadOnlyMemory<byte>> GetEnumerator()
+        {
+            yield break;
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     // ---------------------------------------------------------- the fingerprint must be lossless
 
     // Built in-body rather than passed through [InlineData]: xUnit's theory-data serialization
@@ -452,6 +628,9 @@ internal sealed class HostileBbsProvider : IBbsCryptoProvider
 
     internal Func<byte[]>? SignReturns { get; set; }
 
+    /// <summary>Returned instead of a real verification result, when set — a provider lying in both halves.</summary>
+    internal Func<bool>? VerifyReturns { get; set; }
+
     internal int SignCalls { get; private set; }
 
     public BbsCiphersuite Ciphersuite => _inner.Ciphersuite;
@@ -465,7 +644,7 @@ internal sealed class HostileBbsProvider : IBbsCryptoProvider
     }
 
     public bool Verify(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> signature, IReadOnlyList<byte[]> messages, ReadOnlySpan<byte> header = default)
-        => _inner.Verify(publicKey, signature, messages, header);
+        => VerifyReturns is { } fabricated ? fabricated() : _inner.Verify(publicKey, signature, messages, header);
 
     public byte[] DeriveProof(ReadOnlySpan<byte> publicKey, byte[] signature, IReadOnlyList<byte[]> messages,
         IReadOnlyList<int> revealedIndices, ReadOnlySpan<byte> presentationHeader, ReadOnlySpan<byte> header = default)

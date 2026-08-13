@@ -402,3 +402,48 @@ PRD §8 per-release hygiene rule, leaving Unshipped empty again.
 
 **Stopping here by agreement:** branch and PR only. No merge, no `v1.6.0` tag, and no NuGet
 publish — `release.yml` fires on `v*`, so the irreversible tail stays with the maintainer.
+
+---
+
+## 6. Follow-up — PR #27 review findings (2026-08-13)
+
+Two reviews landed on the PR: an LGTM comment with two non-blocking notes
+(issuecomment-5281599129), and a blocking review with four findings
+(pullrequestreview-4928320731). Assessing all six by reproduction — a finding is accepted only
+if a regression test fails on `34272d1`.
+
+- [x] R1 (blocking review §1) — BBS output self-certifies: the verifier is the injected
+      provider that produced the signature. My hardening test's fake lied only in `Sign`.
+- [x] R2 (blocking review §2) — `ImportAsync` leaks backend exceptions from
+      `IKeyGenerator.FromPrivateKey` (only `ArgumentException` is mapped).
+- [x] R3 (blocking review §3) — `with { Operation = … }` on a `KeyStoreCapability` skips the
+      cross-field algorithm invariant (per-field `init` validation misses pair consistency).
+- [x] R4 (blocking review §4) — `SignBbsAsync` allocates from an untrusted `Count` before any
+      bound; `MaxInputBytes` cannot bound a count of zero-byte messages.
+- [x] N1 (LGTM note 1) — doc note on legacy `SignAsync` pointing at the request path for the
+      return-path check.
+- [x] N2 (LGTM note 2) — legacy `GenerateAsync` calls the generator before
+      `OperationScope.Enter()`.
+- [x] Verify → fix → full suite green → CHANGELOG/PRD updated → commit + push.
+
+### Assessment and results
+
+**All six accepted as valid** — each of the four blocking findings reproduced via a regression
+test that fails on `34272d1` and passes with the fix (the revert-proof doubles as the
+reproduction):
+
+| Finding | Verdict | Fix |
+|---|---|---|
+| R1 BBS self-certification | Valid. My earlier hardening fake lied only in `Sign` — exactly the check a provider lying in both halves defeats. | Verify through an internal `DefaultBbsCryptoProvider` when the native suite is loadable; documented fallback otherwise. Mirrors the ECDSA `VerificationProvider`. |
+| R2 import backend-exception leak | Valid. Only `ArgumentException` was mapped inside the consume reader; `DllNotFoundException` escaped raw after the material was spent. | Wrap non-contract exceptions from ingestion as `KeyStoreException(Unavailable)`; material remains consumed (the store saw the secret) — documented. |
+| R3 capability `with` cross-field hole | Valid. Per-field `init` validation missed pair consistency: `signCap with { Operation = Generate }` kept the algorithm. | `Operation` accessor re-validates the pairing against the current algorithm. Consequence (documented): operation+algorithm cannot be changed across the divide via `with` in either order — construct anew. |
+| R4 BBS count OOM | Valid. `new byte[count][]` allocated from an untrusted `Count`; `int.MaxValue` → `OutOfMemoryException`, and a byte bound cannot limit zero-byte messages. Negative `Count` would also have thrown `OverflowException`. | `MaxBbsMessageCount = 4096` checked before any allocation; `count <= 0` and `count > cap` are parameter faults. PRD rule 9 extended. |
+| N1 legacy `SignAsync` doc | Valid (doc-only). | Remarks now state the missing return-path check and point at the request path. |
+| N2 legacy generate scope ordering | Valid (consistency). | Scope entered before the generator on the legacy path; new test proves a reentrant generator is refused there too. |
+
+On the blocking review's scope objection (one PR / one release vs. the issue's staged option):
+the single-release scope was an explicit approved decision recorded in §0, made because the
+downstream custody port audits once — restating, not relitigating.
+
+All five new regression tests proven genuine by revert (R1, R2, R3, R4, N2). Full suite:
+1202 passed / 5 pre-existing BBS-absent failures; no-native leg fully green; all samples exit 0.

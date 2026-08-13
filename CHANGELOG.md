@@ -117,6 +117,34 @@ downstream backend author would inherit the same mistakes:
   rather than a retryable `Unavailable`; a provider cannot fabricate a cancellation the caller
   never requested; and a provider-internal argument fault is no longer blamed on the caller.
 
+Four further gaps found by PR #27 review, fixed before release with regression tests proven
+genuine by reverting each guard:
+
+- **BBS output no longer self-certifies.** The return-path check previously asked the injected
+  provider to verify its own signature, so a provider lying in both `Sign` and `Verify` passed 80
+  bytes of noise. Verification now runs through the in-repo `DefaultBbsCryptoProvider` whenever
+  the native suite is loadable, matching the trust separation the ECDSA path already had; the
+  fallback for a managed third-party BBS implementation without the native library is documented
+  as weaker rather than implied away.
+- **Import no longer leaks backend exceptions.** Only `ArgumentException` from
+  `IKeyGenerator.FromPrivateKey` was mapped, so a generator failing with e.g.
+  `DllNotFoundException` escaped raw — after the material was consumed — contradicting "no backend
+  exception type escapes". Now `KeyStoreException(Unavailable)` with the original as
+  `InnerException`.
+- **`KeyStoreCapability` preserves its cross-field invariant under `with`.** Mutating `Operation`
+  alone could keep an algorithm on a Generate capability (or strip the one Sign requires); the
+  `Operation` accessor now re-validates the pairing. Changing operation and algorithm across that
+  divide requires constructing a new capability.
+- **BBS bounds the message count (4096 in the reference store), before any allocation.**
+  `Messages.Count` is untrusted and `MaxInputBytes` cannot limit a count of zero-byte messages, so
+  a list reporting `int.MaxValue` produced `OutOfMemoryException` at the snapshot allocation.
+  Absurd counts — negative included — now fail as parameter-named argument faults.
+
+Plus the two notes from the approving review: the legacy `SignAsync` overload's XML docs now state
+it carries no return-path identity check and point at `SignAsync(KeySignRequest)`, and the legacy
+`GenerateAsync` enters the reentrancy scope before invoking the key generator, matching the
+request-based path.
+
 ### Documentation
 
 - **README gains an "Implementing a capable key store" section** — the ten contract rules and the
