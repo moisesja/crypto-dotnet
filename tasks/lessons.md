@@ -217,3 +217,21 @@ is documented", search for X.
 
 → Rule: NFR-6, FR-7b rule 11; [`adversarial-pass`](../.claude/skills/adversarial-pass/SKILL.md)
 ("hostile or buggy backend output"). See [[L9]].
+
+## L13 — A read-only outer collection does not make mutable elements trustworthy
+
+During the PR #27 repair I separated BBS verification from the injected provider, but initially
+passed the producer and independent verifier the same `IReadOnlyList<byte[]>`. The outer list
+prevented replacement of an element; each `byte[]` element was still mutable. A hostile producer
+rewrote one message, signed the rewrite, and the independent verifier then checked those same
+rewritten bytes. The verification provider was independent, but its evidence was not.
+
+The same review also exposed the exception analogue: filtering only familiar backend exception
+types misses fabricated cancellation, disposed provider sessions, and internal argument faults.
+At an injected-code boundary, classify an exception by where it originated and whether a narrow,
+documented caller-input signal applies — not by a hopeful list of concrete exception types.
+
+→ Rule: when an untrusted dependency receives mutable nested buffers, retain an independent deep
+snapshot for validation and pass the dependency a separate copy. Treat every exception thrown
+inside the dependency call as backend-originated except narrowly specified caller-input contracts.
+NFR-6, NFR-3; [`adversarial-pass`](../.claude/skills/adversarial-pass/SKILL.md).

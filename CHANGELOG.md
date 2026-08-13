@@ -117,28 +117,35 @@ downstream backend author would inherit the same mistakes:
   rather than a retryable `Unavailable`; a provider cannot fabricate a cancellation the caller
   never requested; and a provider-internal argument fault is no longer blamed on the caller.
 
-Four further gaps found by PR #27 review, fixed before release with regression tests proven
+Further gaps found by PR #27 review, fixed before release with regression tests proven
 genuine by reverting each guard:
 
 - **BBS output no longer self-certifies.** The return-path check previously asked the injected
   provider to verify its own signature, so a provider lying in both `Sign` and `Verify` passed 80
-  bytes of noise. Verification now runs through the in-repo `DefaultBbsCryptoProvider` whenever
-  the native suite is loadable, matching the trust separation the ECDSA path already had; the
-  fallback for a managed third-party BBS implementation without the native library is documented
-  as weaker rather than implied away.
-- **Import no longer leaks backend exceptions.** Only `ArgumentException` from
-  `IKeyGenerator.FromPrivateKey` was mapped, so a generator failing with e.g.
-  `DllNotFoundException` escaped raw — after the material was consumed — contradicting "no backend
-  exception type escapes". Now `KeyStoreException(Unavailable)` with the original as
-  `InnerException`.
+  bytes of noise. The reference store now advertises BBS only when both its configured producer
+  and the independent in-repo `DefaultBbsCryptoProvider` verifier are available; there is no
+  same-provider fallback in the supported no-native mode. The producer also receives a separate
+  deep copy of the messages, so it cannot rewrite the mutable `byte[]` elements that the
+  independent verifier uses as evidence.
+- **Generate/import no longer leak backend exceptions by type.** Generator-originated
+  `ObjectDisposedException`, fabricated `OperationCanceledException`, internal
+  `ArgumentException`, native load failures, and other backend faults now surface as
+  `KeyStoreException(Unavailable)` with the original as `InnerException`. Only a private-key
+  rejection explicitly naming the forwarded `privateKey` remains a caller argument fault.
+- **Generator output is checked before commit.** A same-type `KeyPair` can still pair key A's
+  public bytes with key B's private bytes. Generate and import now independently re-derive the
+  public half from the returned private half and reject a mismatch as `Unavailable`, before any
+  key or mutation receipt is stored.
 - **`KeyStoreCapability` preserves its cross-field invariant under `with`.** Mutating `Operation`
   alone could keep an algorithm on a Generate capability (or strip the one Sign requires); the
   `Operation` accessor now re-validates the pairing. Changing operation and algorithm across that
   divide requires constructing a new capability.
-- **BBS bounds the message count (4096 in the reference store), before any allocation.**
+- **BBS bounds the message count (4096 in the reference store) and byte total before copying.**
   `Messages.Count` is untrusted and `MaxInputBytes` cannot limit a count of zero-byte messages, so
   a list reporting `int.MaxValue` produced `OutOfMemoryException` at the snapshot allocation.
-  Absurd counts — negative included — now fail as parameter-named argument faults.
+  Absurd counts — negative included — now fail as parameter-named argument faults. Oversized
+  headers/messages stop before copying, and a list whose indexer cannot honor its own `Count`
+  becomes `ArgumentException("request")` rather than leaking `IndexOutOfRangeException`.
 
 Plus the two notes from the approving review: the legacy `SignAsync` overload's XML docs now state
 it carries no return-path identity check and point at `SignAsync(KeySignRequest)`, and the legacy

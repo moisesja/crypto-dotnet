@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Reflection;
+using System.Security.Cryptography;
 using FluentAssertions;
 
 namespace NetCrypto.Tests.KeyStore;
@@ -108,6 +109,62 @@ public class CapableKeyStoreHardeningTests
     }
 
     [Fact]
+    [Trait("Category", "NativeFFI")]
+    public async Task ABbsProviderCannotRewriteThePayloadUsedByTheIndependentVerifier()
+    {
+        var bbs = new HostileBbsProvider
+        {
+            BeforeSign = messages => messages[0][0] = 0xEE,
+        };
+        using var backend = new InMemoryKeyStoreBackend();
+        using var store = CapableStoreTestSupport.NewStore(backend, "ns", bbs: bbs);
+        var (alias, instanceId) = await store.SeedAsync("issuer", KeyType.Bls12381G2);
+        var callerMessage = new byte[] { 0x07, 0x08, 0x09 };
+
+        var act = () => store.SignBbsAsync(new KeyBbsSignRequest(
+            alias, instanceId, KeyStoreAlgorithms.BbsBls12381Sha256,
+            [new ReadOnlyMemory<byte>(callerMessage)], ReadOnlyMemory<byte>.Empty));
+
+        (await act.Should().ThrowAsync<KeyStoreException>()).Which.Error.Should().Be(KeyStoreError.Unavailable);
+        // The provider must receive neither the caller's buffer nor the verifier's snapshot.
+        callerMessage.Should().Equal(0x07, 0x08, 0x09);
+    }
+
+    [Fact]
+    public async Task BbsIsAdvertisedOnlyWhenAnIndependentVerifierIsAvailable()
+    {
+        // A producer reporting itself available is insufficient: in the no-native leg the only
+        // in-repo verifier is absent, so asking this same producer to Verify would let it certify
+        // its own fabricated output. This test deliberately runs on both legs.
+        var bbs = new HostileBbsProvider
+        {
+            SignReturns = () => Enumerable.Repeat((byte)0xAB, 80).ToArray(),
+            VerifyReturns = () => true,
+        };
+        using var backend = new InMemoryKeyStoreBackend();
+        using var store = CapableStoreTestSupport.NewStore(backend, "ns", bbs: bbs);
+        var (alias, instanceId) = await store.SeedAsync("issuer", KeyType.Bls12381G2);
+
+        var advertised = (await store.GetCapabilitiesAsync()).Capabilities
+            .Any(c => c.Operation == KeyStoreOperation.BbsSign);
+
+        advertised.Should().Be(CapableStoreTestSupport.BbsProvider.IsAvailable,
+            "the reference store may advertise BBS only when its independent verifier is loadable");
+
+        if (!CapableStoreTestSupport.BbsProvider.IsAvailable)
+        {
+            var act = () => store.SignBbsAsync(new KeyBbsSignRequest(
+                alias, instanceId, KeyStoreAlgorithms.BbsBls12381Sha256,
+                [new ReadOnlyMemory<byte>("m"u8.ToArray())], ReadOnlyMemory<byte>.Empty));
+
+            (await act.Should().ThrowAsync<KeyStoreException>()).Which.Error
+                .Should().Be(KeyStoreError.Unsupported);
+            bbs.SignCalls.Should().Be(0);
+            bbs.VerifyCalls.Should().Be(0);
+        }
+    }
+
+    [Fact]
     public async Task AnImportWhoseGeneratorFailsWithABackendError_SurfacesAsUnavailable()
     {
         // PR #27 review: only ArgumentException from FromPrivateKey was mapped, so a generator
@@ -128,6 +185,164 @@ public class CapableKeyStoreHardeningTests
         thrown.InnerException.Should().BeOfType<DllNotFoundException>();
         (await store.ListAsync()).Should().BeEmpty("a failed ingestion must not commit a key");
         material.IsConsumed.Should().BeTrue("the store saw the secret, so the transfer is spent");
+    }
+
+    [Fact]
+    public async Task GeneratorOriginatedExceptionTypes_AreUnavailableOnGenerate()
+    {
+        Exception[] failures =
+        [
+            new ObjectDisposedException("vendorSession"),
+            new OperationCanceledException("fabricated cancellation"),
+            new ArgumentException("invalid vendor configuration", "configuration"),
+        ];
+
+        foreach (var failure in failures)
+        {
+            using var backend = new InMemoryKeyStoreBackend();
+            using var store = new CapableInMemoryKeyStore(
+                backend, new KeyStoreNamespaceId("ns"), new ConfigurableFailingGenerator(failure),
+                CapableStoreTestSupport.CryptoProvider);
+
+            var act = () => store.GenerateAsync(
+                new KeyGenerateRequest(CapableStoreTestSupport.NewOperationId(), "k", KeyType.Ed25519));
+
+            var thrown = (await act.Should().ThrowAsync<KeyStoreException>()).Which;
+            thrown.Error.Should().Be(KeyStoreError.Unavailable);
+            thrown.InnerException.Should().BeSameAs(failure);
+            (await store.ListAsync()).Should().BeEmpty();
+        }
+    }
+
+    [Fact]
+    public async Task GeneratorOriginatedExceptionTypes_AreUnavailableOnImport()
+    {
+        Exception[] failures =
+        [
+            new ObjectDisposedException("vendorSession"),
+            new OperationCanceledException("fabricated cancellation"),
+            new ArgumentException("invalid vendor configuration", "configuration"),
+        ];
+
+        foreach (var failure in failures)
+        {
+            using var backend = new InMemoryKeyStoreBackend();
+            using var store = new CapableInMemoryKeyStore(
+                backend, new KeyStoreNamespaceId("ns"), new ConfigurableFailingGenerator(failure),
+                CapableStoreTestSupport.CryptoProvider);
+            using var pair = CapableStoreTestSupport.KeyGenerator.Generate(KeyType.Ed25519);
+            var material = TransferableKeyMaterial.FromKeyPair(pair);
+
+            var act = () => store.ImportAsync(
+                new KeyImportRequest(CapableStoreTestSupport.NewOperationId(), "k", material));
+
+            var thrown = (await act.Should().ThrowAsync<KeyStoreException>()).Which;
+            thrown.Error.Should().Be(KeyStoreError.Unavailable);
+            thrown.InnerException.Should().BeSameAs(failure);
+            material.IsConsumed.Should().BeTrue("the generator saw the secret before failing");
+            (await store.ListAsync()).Should().BeEmpty();
+        }
+    }
+
+    [Fact]
+    public async Task AGeneratorPrivateKeyRejection_RemainsARequestArgumentFault()
+    {
+        var rejection = new ArgumentException("invalid private scalar", "privateKey");
+        using var backend = new InMemoryKeyStoreBackend();
+        using var store = new CapableInMemoryKeyStore(
+            backend, new KeyStoreNamespaceId("ns"), new ConfigurableFailingGenerator(rejection),
+            CapableStoreTestSupport.CryptoProvider);
+        using var pair = CapableStoreTestSupport.KeyGenerator.Generate(KeyType.Ed25519);
+        var material = TransferableKeyMaterial.FromKeyPair(pair);
+
+        var act = () => store.ImportAsync(
+            new KeyImportRequest(CapableStoreTestSupport.NewOperationId(), "k", material));
+
+        (await act.Should().ThrowAsync<ArgumentException>()).Which.ParamName.Should().Be("request");
+        material.IsConsumed.Should().BeTrue();
+        (await store.ListAsync()).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(InvalidGeneratorOutput.Null)]
+    [InlineData(InvalidGeneratorOutput.WrongKeyType)]
+    [InlineData(InvalidGeneratorOutput.Disposed)]
+    [InlineData(InvalidGeneratorOutput.MalformedSameType)]
+    public async Task InvalidGeneratorOutputs_AreUnavailableOnGenerate(InvalidGeneratorOutput output)
+    {
+        using var backend = new InMemoryKeyStoreBackend();
+        using var store = new CapableInMemoryKeyStore(
+            backend, new KeyStoreNamespaceId("ns"), new InvalidOutputGenerator(output),
+            CapableStoreTestSupport.CryptoProvider);
+
+        var act = () => store.GenerateAsync(
+            new KeyGenerateRequest(CapableStoreTestSupport.NewOperationId(), "k", KeyType.Ed25519));
+
+        var thrown = (await act.Should().ThrowAsync<KeyStoreException>()).Which;
+        thrown.Error.Should().Be(KeyStoreError.Unavailable);
+        thrown.InnerException.Should().BeAssignableTo<Exception>();
+        (await store.ListAsync()).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(InvalidGeneratorOutput.Null)]
+    [InlineData(InvalidGeneratorOutput.WrongKeyType)]
+    [InlineData(InvalidGeneratorOutput.Disposed)]
+    [InlineData(InvalidGeneratorOutput.MalformedSameType)]
+    public async Task InvalidGeneratorOutputs_AreUnavailableOnImport(InvalidGeneratorOutput output)
+    {
+        using var backend = new InMemoryKeyStoreBackend();
+        using var store = new CapableInMemoryKeyStore(
+            backend, new KeyStoreNamespaceId("ns"), new InvalidOutputGenerator(output),
+            CapableStoreTestSupport.CryptoProvider);
+        using var pair = CapableStoreTestSupport.KeyGenerator.Generate(KeyType.Ed25519);
+        var material = TransferableKeyMaterial.FromKeyPair(pair);
+
+        var act = () => store.ImportAsync(
+            new KeyImportRequest(CapableStoreTestSupport.NewOperationId(), "k", material));
+
+        var thrown = (await act.Should().ThrowAsync<KeyStoreException>()).Which;
+        thrown.Error.Should().Be(KeyStoreError.Unavailable);
+        thrown.InnerException.Should().BeAssignableTo<Exception>();
+        material.IsConsumed.Should().BeTrue();
+        (await store.ListAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AGeneratedPairWithMismatchedPublicAndPrivateHalves_IsRejectedBeforeCommit()
+    {
+        using var backend = new InMemoryKeyStoreBackend();
+        using var store = new CapableInMemoryKeyStore(
+            backend, new KeyStoreNamespaceId("ns"), new MismatchedPairGenerator(),
+            CapableStoreTestSupport.CryptoProvider);
+
+        var act = () => store.GenerateAsync(
+            new KeyGenerateRequest(CapableStoreTestSupport.NewOperationId(), "k", KeyType.Ed25519));
+
+        var thrown = (await act.Should().ThrowAsync<KeyStoreException>()).Which;
+        thrown.Error.Should().Be(KeyStoreError.Unavailable);
+        thrown.InnerException.Should().BeOfType<InvalidOperationException>();
+        (await store.ListAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AnImportedPairWithMismatchedPublicAndPrivateHalves_IsRejectedBeforeCommit()
+    {
+        using var backend = new InMemoryKeyStoreBackend();
+        using var store = new CapableInMemoryKeyStore(
+            backend, new KeyStoreNamespaceId("ns"), new MismatchedPairGenerator(),
+            CapableStoreTestSupport.CryptoProvider);
+        using var source = CapableStoreTestSupport.KeyGenerator.Generate(KeyType.Ed25519);
+        var material = TransferableKeyMaterial.FromKeyPair(source);
+
+        var act = () => store.ImportAsync(
+            new KeyImportRequest(CapableStoreTestSupport.NewOperationId(), "k", material));
+
+        var thrown = (await act.Should().ThrowAsync<KeyStoreException>()).Which;
+        thrown.Error.Should().Be(KeyStoreError.Unavailable);
+        thrown.InnerException.Should().BeOfType<InvalidOperationException>();
+        material.IsConsumed.Should().BeTrue();
+        (await store.ListAsync()).Should().BeEmpty();
     }
 
     [Fact]
@@ -173,18 +388,89 @@ public class CapableKeyStoreHardeningTests
     }
 
     [Fact]
-    public async Task TheMessageCountBound_IsInclusive()
+    public async Task AMessageListWithAnUnreadableCount_IsARequestArgumentFault()
     {
-        using var store = CapableStoreTestSupport.NewBbsStore();
+        using var store = CapableStoreTestSupport.NewStore();
         var (alias, instanceId) = await store.SeedAsync("issuer", KeyType.Bls12381G2);
 
-        var oneOver = Enumerable.Repeat(new ReadOnlyMemory<byte>("m"u8.ToArray()),
-            CapableInMemoryKeyStore.MaxBbsMessageCount + 1).ToList();
+        var act = () => store.SignBbsAsync(new KeyBbsSignRequest(
+            alias, instanceId, KeyStoreAlgorithms.BbsBls12381Sha256,
+            new UnreadableCountMessages(), ReadOnlyMemory<byte>.Empty));
+
+        var thrown = (await act.Should().ThrowAsync<ArgumentException>()).Which;
+        thrown.ParamName.Should().Be("request");
+        thrown.InnerException.Should().BeOfType<ObjectDisposedException>();
+    }
+
+    [Fact]
+    public async Task TheMessageCountBound_IsInclusive()
+    {
+        // No BBS provider is intentional: reaching Unsupported proves the exact maximum passed
+        // count validation on both native-present and no-native test legs.
+        using var store = CapableStoreTestSupport.NewStore();
+        var (alias, instanceId) = await store.SeedAsync("issuer", KeyType.Bls12381G2);
+
+        var exact = Enumerable.Repeat(ReadOnlyMemory<byte>.Empty,
+            CapableInMemoryKeyStore.MaxBbsMessageCount).ToList();
 
         var act = () => store.SignBbsAsync(new KeyBbsSignRequest(
-            alias, instanceId, KeyStoreAlgorithms.BbsBls12381Sha256, oneOver, ReadOnlyMemory<byte>.Empty));
+            alias, instanceId, KeyStoreAlgorithms.BbsBls12381Sha256, exact, ReadOnlyMemory<byte>.Empty));
+
+        (await act.Should().ThrowAsync<KeyStoreException>()).Which.Error.Should().Be(KeyStoreError.Unsupported);
+    }
+
+    [Fact]
+    [Trait("Category", "NativeFFI")]
+    public async Task BbsStopsReadingMessagesAsSoonAsTheByteBoundIsCrossed()
+    {
+        var bbs = new HostileBbsProvider();
+        using var backend = new InMemoryKeyStoreBackend();
+        using var store = CapableStoreTestSupport.NewStore(backend, "ns", bbs: bbs);
+        var (alias, instanceId) = await store.SeedAsync("issuer", KeyType.Bls12381G2);
+        var messages = new BoundCrossingMessages(
+            count: CapableInMemoryKeyStore.MaxBbsMessageCount,
+            messageBytes: (CapableInMemoryKeyStore.MaxBbsInputBytes / 4) + 1);
+
+        var act = () => store.SignBbsAsync(new KeyBbsSignRequest(
+            alias, instanceId, KeyStoreAlgorithms.BbsBls12381Sha256, messages, ReadOnlyMemory<byte>.Empty));
 
         await act.Should().ThrowAsync<ArgumentException>().WithParameterName("request");
+        messages.ReadCount.Should().Be(4, "the fourth message crosses the bound; later elements must not be read");
+        bbs.SignCalls.Should().Be(0);
+    }
+
+    [Fact]
+    [Trait("Category", "NativeFFI")]
+    public async Task AnOversizedBbsHeader_IsRejectedBeforeAnyMessageIsRead()
+    {
+        using var backend = new InMemoryKeyStoreBackend();
+        using var store = CapableStoreTestSupport.NewStore(backend, "ns", bbs: new HostileBbsProvider());
+        var (alias, instanceId) = await store.SeedAsync("issuer", KeyType.Bls12381G2);
+        var messages = new BoundCrossingMessages(count: 1, messageBytes: 1);
+
+        var act = () => store.SignBbsAsync(new KeyBbsSignRequest(
+            alias, instanceId, KeyStoreAlgorithms.BbsBls12381Sha256, messages,
+            new byte[CapableInMemoryKeyStore.MaxBbsInputBytes + 1]));
+
+        await act.Should().ThrowAsync<ArgumentException>().WithParameterName("request");
+        messages.ReadCount.Should().Be(0);
+    }
+
+    [Fact]
+    [Trait("Category", "NativeFFI")]
+    public async Task AMessageListThatCannotHonorItsCount_IsARequestArgumentFault()
+    {
+        using var backend = new InMemoryKeyStoreBackend();
+        using var store = CapableStoreTestSupport.NewStore(backend, "ns", bbs: new HostileBbsProvider());
+        var (alias, instanceId) = await store.SeedAsync("issuer", KeyType.Bls12381G2);
+
+        var act = () => store.SignBbsAsync(new KeyBbsSignRequest(
+            alias, instanceId, KeyStoreAlgorithms.BbsBls12381Sha256,
+            new MissingIndexedMessage(), ReadOnlyMemory<byte>.Empty));
+
+        var thrown = (await act.Should().ThrowAsync<ArgumentException>()).Which;
+        thrown.ParamName.Should().Be("request");
+        thrown.InnerException.Should().BeOfType<IndexOutOfRangeException>();
     }
 
     [Fact]
@@ -223,6 +509,108 @@ public class CapableKeyStoreHardeningTests
             => throw new DllNotFoundException("the HSM driver is missing");
     }
 
+    private sealed class ConfigurableFailingGenerator(Exception failure) : IKeyGenerator
+    {
+        public KeyPair Generate(KeyType keyType) => throw failure;
+
+        public KeyPair FromPrivateKey(KeyType keyType, ReadOnlySpan<byte> privateKey) => throw failure;
+
+        public PublicKeyReference FromPublicKey(KeyType keyType, ReadOnlySpan<byte> publicKey) => throw failure;
+
+        public KeyPair DeriveX25519FromEd25519(KeyPair ed25519KeyPair) => throw failure;
+
+        public PublicKeyReference DeriveX25519PublicKeyFromEd25519(ReadOnlySpan<byte> ed25519PublicKey)
+            => throw failure;
+    }
+
+    public enum InvalidGeneratorOutput
+    {
+        Null,
+        WrongKeyType,
+        Disposed,
+        MalformedSameType,
+    }
+
+    private sealed class InvalidOutputGenerator(InvalidGeneratorOutput output) : IKeyGenerator
+    {
+        public KeyPair Generate(KeyType keyType) => InvalidPair();
+
+        public KeyPair FromPrivateKey(KeyType keyType, ReadOnlySpan<byte> privateKey) => InvalidPair();
+
+        public PublicKeyReference FromPublicKey(KeyType keyType, ReadOnlySpan<byte> publicKey)
+            => throw new NotSupportedException();
+
+        public KeyPair DeriveX25519FromEd25519(KeyPair ed25519KeyPair) => throw new NotSupportedException();
+
+        public PublicKeyReference DeriveX25519PublicKeyFromEd25519(ReadOnlySpan<byte> ed25519PublicKey)
+            => throw new NotSupportedException();
+
+        private KeyPair InvalidPair()
+        {
+            if (output == InvalidGeneratorOutput.Null)
+                return null!;
+
+            if (output == InvalidGeneratorOutput.MalformedSameType)
+                return new KeyPair
+                {
+                    KeyType = KeyType.Ed25519,
+                    PublicKey = new byte[32],
+                    PrivateKey = [0x01],
+                };
+
+            var pair = CapableStoreTestSupport.KeyGenerator.Generate(
+                output == InvalidGeneratorOutput.WrongKeyType ? KeyType.P256 : KeyType.Ed25519);
+            if (output == InvalidGeneratorOutput.Disposed)
+                pair.Dispose();
+
+            return pair;
+        }
+    }
+
+    private sealed class MismatchedPairGenerator : IKeyGenerator
+    {
+        public KeyPair Generate(KeyType keyType)
+        {
+            using var publicSource = CapableStoreTestSupport.KeyGenerator.Generate(keyType);
+            using var privateSource = CapableStoreTestSupport.KeyGenerator.Generate(keyType);
+            return Combine(publicSource.PublicKey, privateSource);
+        }
+
+        public KeyPair FromPrivateKey(KeyType keyType, ReadOnlySpan<byte> privateKey)
+        {
+            using var publicSource = CapableStoreTestSupport.KeyGenerator.FromPrivateKey(keyType, privateKey);
+            using var privateSource = CapableStoreTestSupport.KeyGenerator.Generate(keyType);
+            return Combine(publicSource.PublicKey, privateSource);
+        }
+
+        public PublicKeyReference FromPublicKey(KeyType keyType, ReadOnlySpan<byte> publicKey)
+            => throw new NotSupportedException();
+
+        public KeyPair DeriveX25519FromEd25519(KeyPair ed25519KeyPair) => throw new NotSupportedException();
+
+        public PublicKeyReference DeriveX25519PublicKeyFromEd25519(ReadOnlySpan<byte> ed25519PublicKey)
+            => throw new NotSupportedException();
+
+        private static KeyPair Combine(byte[] publicKey, KeyPair privateSource) =>
+            privateSource.WithPrivateKey(privateKey =>
+            {
+                var privateCopy = privateKey.ToArray();
+                try
+                {
+                    return new KeyPair
+                    {
+                        KeyType = privateSource.KeyType,
+                        PublicKey = publicKey,
+                        PrivateKey = privateCopy,
+                    };
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(privateCopy);
+                }
+            });
+    }
+
     private sealed class ReentrantKeyGenerator(Action reenter) : IKeyGenerator
     {
         public KeyPair Generate(KeyType keyType)
@@ -250,6 +638,58 @@ public class CapableKeyStoreHardeningTests
         public int Count => reportedCount;
 
         public ReadOnlyMemory<byte> this[int index] => ReadOnlyMemory<byte>.Empty;
+
+        public IEnumerator<ReadOnlyMemory<byte>> GetEnumerator()
+        {
+            yield break;
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    private sealed class BoundCrossingMessages(int count, int messageBytes)
+        : IReadOnlyList<ReadOnlyMemory<byte>>
+    {
+        public int Count => count;
+
+        internal int ReadCount { get; private set; }
+
+        public ReadOnlyMemory<byte> this[int index]
+        {
+            get
+            {
+                ReadCount++;
+                return new byte[messageBytes];
+            }
+        }
+
+        public IEnumerator<ReadOnlyMemory<byte>> GetEnumerator()
+        {
+            yield break;
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    private sealed class MissingIndexedMessage : IReadOnlyList<ReadOnlyMemory<byte>>
+    {
+        public int Count => 1;
+
+        public ReadOnlyMemory<byte> this[int index] => throw new IndexOutOfRangeException();
+
+        public IEnumerator<ReadOnlyMemory<byte>> GetEnumerator()
+        {
+            yield break;
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    private sealed class UnreadableCountMessages : IReadOnlyList<ReadOnlyMemory<byte>>
+    {
+        public int Count => throw new ObjectDisposedException(nameof(UnreadableCountMessages));
+
+        public ReadOnlyMemory<byte> this[int index] => throw new IndexOutOfRangeException();
 
         public IEnumerator<ReadOnlyMemory<byte>> GetEnumerator()
         {
@@ -628,10 +1068,14 @@ internal sealed class HostileBbsProvider : IBbsCryptoProvider
 
     internal Func<byte[]>? SignReturns { get; set; }
 
+    internal Action<IReadOnlyList<byte[]>>? BeforeSign { get; set; }
+
     /// <summary>Returned instead of a real verification result, when set — a provider lying in both halves.</summary>
     internal Func<bool>? VerifyReturns { get; set; }
 
     internal int SignCalls { get; private set; }
+
+    internal int VerifyCalls { get; private set; }
 
     public BbsCiphersuite Ciphersuite => _inner.Ciphersuite;
 
@@ -640,11 +1084,15 @@ internal sealed class HostileBbsProvider : IBbsCryptoProvider
     public byte[] Sign(ReadOnlySpan<byte> privateKey, IReadOnlyList<byte[]> messages, ReadOnlySpan<byte> header = default)
     {
         SignCalls++;
+        BeforeSign?.Invoke(messages);
         return SignReturns is { } producer ? producer() : _inner.Sign(privateKey, messages, header);
     }
 
     public bool Verify(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> signature, IReadOnlyList<byte[]> messages, ReadOnlySpan<byte> header = default)
-        => VerifyReturns is { } fabricated ? fabricated() : _inner.Verify(publicKey, signature, messages, header);
+    {
+        VerifyCalls++;
+        return VerifyReturns is { } fabricated ? fabricated() : _inner.Verify(publicKey, signature, messages, header);
+    }
 
     public byte[] DeriveProof(ReadOnlySpan<byte> publicKey, byte[] signature, IReadOnlyList<byte[]> messages,
         IReadOnlyList<int> revealedIndices, ReadOnlySpan<byte> presentationHeader, ReadOnlySpan<byte> header = default)

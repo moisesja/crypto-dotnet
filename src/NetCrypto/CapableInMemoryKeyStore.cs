@@ -147,7 +147,15 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
         _bbsProvider = bbsProvider;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _ownsBackend = ownsBackend;
-        _capabilities = bbsProvider is { IsAvailable: true } ? CapabilitiesWithBbs : CapabilitiesWithoutBbs;
+        // BBS is advertised only when this store can both produce and independently verify the
+        // result. Asking the injected producer to verify its own output is not an integrity check:
+        // a provider that fabricates a signature can bless it too. In the supported no-native
+        // mode the reference store therefore omits BBS even when a third-party producer reports
+        // itself available; a real adapter may advertise it when it supplies its own independent
+        // trust path outside this reference implementation.
+        _capabilities = bbsProvider is { IsAvailable: true } && BbsVerificationProvider.IsAvailable
+            ? CapabilitiesWithBbs
+            : CapabilitiesWithoutBbs;
     }
 
     /// <inheritdoc />
@@ -200,19 +208,33 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
             if (_backend.Keys.ContainsKey(KeyKey(request.Alias)))
                 throw new InvalidOperationException($"Key alias '{request.Alias}' already exists.");
 
-            KeyPair keyPair;
+            KeyPair? keyPair = null;
+            KeyInstanceId instanceId;
+            StoredKeyInfo info;
             try
             {
-                keyPair = _keyGenerator.Generate(request.KeyType);
+                keyPair = _keyGenerator.Generate(request.KeyType)
+                    ?? throw new InvalidOperationException("The key generator returned null.");
+                var publicKey = RequireConsistentKeyPair(keyPair, request.KeyType);
+
+                // Reading and independently deriving the public half are part of validating the
+                // backend result. A generator can return a disposed pair, or pair key A's public
+                // half with key B's private half, without throwing from Generate itself.
+                instanceId = NewInstanceId();
+                info = NewInfo(request.Alias, request.KeyType, publicKey, instanceId);
             }
-            catch (Exception ex) when (IsBackendFailure(ex))
+            catch (Exception ex)
             {
+                keyPair?.Dispose();
+                // Generate receives a validated enum and no cancellation token is delegated to
+                // the generator. Every exception from this call is therefore backend-originated:
+                // an ObjectDisposedException is the generator's disposed session, an
+                // OperationCanceledException is fabricated cancellation, and an
+                // ArgumentException describes generator configuration rather than caller input.
                 throw new KeyStoreException(
                     KeyStoreError.Unavailable, $"The key generator failed to create a {request.KeyType} key.", ex);
             }
 
-            var instanceId = NewInstanceId();
-            var info = NewInfo(request.Alias, keyPair, instanceId);
             var outcome = new KeyGeneratedOutcome(request.OperationId, _timeProvider.GetUtcNow(), info, instanceId);
 
             _backend.Keys[KeyKey(request.Alias)] = new InMemoryKeyStoreBackend.StoredEntry(keyPair, info, instanceId);
@@ -271,20 +293,7 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
             // Acceptance. From here the caller's material is spent, whatever happens next —
             // including the mismatch below, which is deliberate: the store has seen the secret,
             // so handing the caller a second chance with it would be the wrong trade.
-            KeyPair keyPair;
-            try
-            {
-                keyPair = ConsumeAndDerive(material, nameof(request));
-            }
-            catch (Exception ex) when (ex is not (ArgumentException or ObjectDisposedException or KeyStoreException))
-            {
-                // FromPrivateKey runs inside the reader, and only its ArgumentException is mapped
-                // there. Anything else a key generator can throw — a missing HSM driver, a native
-                // load failure — is a backend condition and must not escape as a backend type
-                // (rule 10). The material is already spent; the receipt of that is IsConsumed.
-                throw new KeyStoreException(
-                    KeyStoreError.Unavailable, "The key generator failed while ingesting the imported material.", ex);
-            }
+            var keyPair = ConsumeAndDerive(material, nameof(request));
 
             var instanceId = NewInstanceId();
 
@@ -437,7 +446,17 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
         // (it may lie in either direction), the snapshot allocates from it, and MaxInputBytes
         // cannot help because a count of zero-byte messages stays "within" any byte bound — an
         // absurd Count must fail here, never as an OutOfMemoryException at the allocation.
-        var count = request.Messages.Count;
+        int count;
+        try
+        {
+            count = request.Messages.Count;
+        }
+        catch (Exception ex)
+        {
+            throw new ArgumentException(
+                $"{nameof(KeyBbsSignRequest)}.{nameof(KeyBbsSignRequest.Messages)} has an unreadable Count property.",
+                nameof(request), ex);
+        }
         if (count <= 0)
             throw new ArgumentException("A BBS signature requires at least one message.", nameof(request));
         if (count > MaxBbsMessageCount)
@@ -450,22 +469,43 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
             $"{nameof(KeyBbsSignRequest)}.{nameof(KeyBbsSignRequest.Algorithm)}");
         var capability = RequireCapability(spec.KeyType, KeyStoreOperation.BbsSign, spec.Algorithm);
 
-        // Snapshot FIRST, then measure the snapshot. Messages is a caller-supplied
-        // IReadOnlyList, so its enumerator and its indexer need not agree: bounding one read and
-        // signing another lets a hostile list sign far past the advertised maximum. Reading each
-        // element once means the bound covers exactly the bytes that get signed — and it pins
-        // them against a caller mutating the buffers mid-operation.
+        // Bound before copying. A 32 MiB message must not allocate a second 32 MiB buffer merely
+        // to discover that it violates the advertised 1 MiB limit. Messages is a caller-supplied
+        // IReadOnlyList, so read Count once and each indexed element once; an indexer that cannot
+        // honor its own Count is malformed request shape, not a leaked IndexOutOfRangeException.
+        long total = request.Header.Length;
+        RequireWithinBound(total, capability.MaxInputBytes, nameof(request), "BBS message and header input");
+
         var messages = new byte[count][];
         for (var i = 0; i < count; i++)
-            messages[i] = request.Messages[i].ToArray();
-        var header = request.Header.ToArray();
+        {
+            ReadOnlyMemory<byte> message;
+            try
+            {
+                message = request.Messages[i];
+            }
+            catch (Exception ex)
+            {
+                throw new ArgumentException(
+                    $"{nameof(KeyBbsSignRequest)}.{nameof(KeyBbsSignRequest.Messages)} does not contain " +
+                    $"the {count} elements reported by its Count property.", nameof(request), ex);
+            }
 
-        // Sum in a long: a handful of large messages would otherwise overflow int and slip past
-        // the bound as a negative total.
-        long total = header.Length;
-        foreach (var message in messages)
+            // Sum in a long before the copy. Count is capped at 4096, so even int-sized elements
+            // cannot overflow long; the check stops reading the list at the first excess.
             total += message.Length;
-        RequireWithinBound(total, capability.MaxInputBytes, nameof(request), "BBS message and header input");
+            RequireWithinBound(total, capability.MaxInputBytes, nameof(request), "BBS message and header input");
+            messages[i] = message.ToArray();
+        }
+
+        var header = request.Header.ToArray();
+        // The producing provider receives its own deep copy. byte[] elements remain mutable even
+        // when exposed through IReadOnlyList<byte[]>; sharing them with the independent verifier
+        // would let a hostile provider rewrite the payload, sign the rewrite, and pass the
+        // return-path check against its own altered bytes.
+        var providerMessages = new byte[count][];
+        for (var i = 0; i < count; i++)
+            providerMessages[i] = messages[i].ToArray();
 
         var bbs = _bbsProvider
             ?? throw new KeyStoreException(KeyStoreError.Unsupported, "This store has no BBS provider configured.");
@@ -478,25 +518,21 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
             RequireKeyMatchesAlgorithm(entry, spec);
 
             var signature = RouteToProvider(
-                () => entry.KeyPair.WithPrivateKey(privateKey => bbs.Sign(privateKey, messages, header)),
+                () => entry.KeyPair.WithPrivateKey(privateKey => bbs.Sign(privateKey, providerMessages, header)),
                 nameof(request),
                 "BBS signing",
                 ct);
 
             var checkedSignature = CheckedResult(signature, BbsSignatureLength, "BBS signature");
 
-            // NFR-6.2 for the BBS path, with the same trust separation as the ECDSA path: a
-            // provider that forged the signature will happily verify it too, so the check runs
-            // through the in-repo DefaultBbsCryptoProvider whenever the native suite is
-            // loadable. Only when it is not — a managed third-party BBS implementation on a
-            // platform without the native library — does this fall back to asking the producing
-            // provider, which still catches well-formed noise but not a provider lying in both
-            // halves; that residual weakness is documented rather than implied away.
-            var verifier = BbsVerificationProvider.IsAvailable ? BbsVerificationProvider : bbs;
+            // NFR-6.2 for the BBS path, with the same trust separation as the ECDSA path. The
+            // capability gate guarantees this independent verifier is available before any BBS
+            // request reaches here; there is deliberately no same-provider fallback.
             bool verified;
             try
             {
-                verified = verifier.Verify(entry.Info.PublicKey, checkedSignature, messages, header);
+                verified = BbsVerificationProvider.Verify(
+                    entry.Info.PublicKey, checkedSignature, messages, header);
             }
             catch (Exception ex)
             {
@@ -806,6 +842,7 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
     // providers: a provider that produced a forged signature would happily verify it too.
     private static readonly DefaultCryptoProvider VerificationProvider = new();
     private static readonly DefaultBbsCryptoProvider BbsVerificationProvider = new();
+    private static readonly DefaultKeyGenerator KeyVerificationGenerator = new();
 
     // Replacement fallback would encode every unpaired surrogate — and U+FFFD itself — to the
     // same three bytes, so two distinct requests could share a fingerprint and one caller's
@@ -847,18 +884,47 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
     {
         return material.Consume((type, publicBytes, privateBytes) =>
         {
-            KeyPair derived;
+            KeyPair? derived = null;
+            byte[] derivedPublicKey;
             try
             {
-                derived = _keyGenerator.FromPrivateKey(type, privateBytes);
+                derived = _keyGenerator.FromPrivateKey(type, privateBytes)
+                    ?? throw new InvalidOperationException("The key generator returned null.");
             }
-            catch (ArgumentException ex)
+            catch (ArgumentException ex) when (ex.ParamName == "privateKey")
             {
                 throw new ArgumentException(
                     $"The transferred material is not a valid {type} private key.", paramName, ex);
             }
+            catch (Exception ex)
+            {
+                derived?.Dispose();
+                // The material has already been accepted and exposed to the injected generator,
+                // so it remains consumed. Exceptions not explicitly attributing the forwarded
+                // privateKey are backend failures — including ObjectDisposedException from a
+                // vendor session, fabricated cancellation, and internal argument faults.
+                throw new KeyStoreException(
+                    KeyStoreError.Unavailable,
+                    "The key generator failed while ingesting the imported material.", ex);
+            }
 
-            if (derived.PublicKey.AsSpan().SequenceEqual(publicBytes))
+            try
+            {
+                // Independently prove the returned public and private halves correspond. This is
+                // validation of backend output, not of the caller's forwarded privateKey, so even
+                // an ArgumentException("privateKey") from the independent derivation is
+                // Unavailable rather than a request fault.
+                derivedPublicKey = RequireConsistentKeyPair(derived, type);
+            }
+            catch (Exception ex)
+            {
+                derived.Dispose();
+                throw new KeyStoreException(
+                    KeyStoreError.Unavailable,
+                    "The key generator returned unusable imported key material.", ex);
+            }
+
+            if (derivedPublicKey.AsSpan().SequenceEqual(publicBytes))
                 return derived;
 
             derived.Dispose();
@@ -874,13 +940,38 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
 
     private static KeyInstanceId NewInstanceId() => new(Guid.NewGuid().ToString("N"));
 
-    private static StoredKeyInfo NewInfo(string alias, KeyPair keyPair, KeyInstanceId instanceId) => new()
+    private static StoredKeyInfo NewInfo(string alias, KeyPair keyPair, KeyInstanceId instanceId) =>
+        NewInfo(alias, keyPair.KeyType, keyPair.PublicKey, instanceId);
+
+    private static StoredKeyInfo NewInfo(
+        string alias, KeyType keyType, byte[] publicKey, KeyInstanceId instanceId) => new()
     {
         Alias = alias,
-        KeyType = keyPair.KeyType,
-        PublicKey = keyPair.PublicKey,
+        KeyType = keyType,
+        PublicKey = publicKey,
         InstanceId = instanceId,
     };
+
+    private static byte[] RequireConsistentKeyPair(KeyPair keyPair, KeyType expectedType)
+    {
+        if (keyPair.KeyType != expectedType)
+            throw new InvalidOperationException(
+                $"The key generator returned {keyPair.KeyType} for a {expectedType} request.");
+
+        var advertisedPublicKey = keyPair.PublicKey;
+        var matches = keyPair.WithPrivateKey(privateKey =>
+        {
+            using var independentlyDerived = KeyVerificationGenerator.FromPrivateKey(expectedType, privateKey);
+            return CryptographicOperations.FixedTimeEquals(
+                independentlyDerived.PublicKey, advertisedPublicKey);
+        });
+
+        if (!matches)
+            throw new InvalidOperationException(
+                $"The key generator returned mismatched {expectedType} public and private key material.");
+
+        return advertisedPublicKey;
+    }
 
     private static byte[] Utf8(string value) => StrictUtf8.GetBytes(value);
 
@@ -1097,9 +1188,6 @@ public sealed class CapableInMemoryKeyStore : ICapableKeyStore, IDisposable
 
         return (byte[])result.Clone();
     }
-
-    private static bool IsBackendFailure(Exception ex) =>
-        ex is not (KeyStoreException or OperationCanceledException or ObjectDisposedException or ArgumentException);
 
     // Lengths the algorithm identifier fixes. DER is deliberately absent: its encoding is
     // variable-width, so there is nothing honest to assert beyond non-emptiness.

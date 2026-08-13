@@ -311,11 +311,15 @@ correct):
     signature reaches the caller, the store verifies it under the public key it itself advertises
     for that key instance, through a verifier **independent of the injected provider** — otherwise
     a provider that forged the signature would also bless it. Failure is `Unavailable`. This
-    covers BBS too: verification runs through the in-repo `DefaultBbsCryptoProvider` whenever the
-    native suite is loadable, and only falls back to asking the producing provider when it is not
-    (a managed third-party BBS implementation on a platform without the native library) — that
-    residual weakness is documented rather than implied away. (Key agreement has no verifier at
-    all and is length-checked only.)
+    covers BBS too: the reference store advertises BBS only when both the configured producer and
+    its independent in-repo `DefaultBbsCryptoProvider` verifier are available. There is no
+    same-provider fallback: in the supported no-native mode, a third-party producer alone is not
+    enough for this integrity-promising surface to advertise BBS. The producing provider receives
+    a separate deep copy of every BBS message: `IReadOnlyList<byte[]>` protects only the outer
+    collection, so sharing its mutable elements would let the producer rewrite the verifier's
+    evidence. Generated/imported pairs are likewise independently re-derived from their private
+    half before commit; matching `KeyType` and public-key length alone cannot prove the halves
+    belong together. (Key agreement has no verifier at all and is length-checked only.)
 12. **Identifiers and aliases must be well-formed UTF-16.** `Encoding.UTF8` uses replacement
     fallback, so every unpaired surrogate — and U+FFFD itself — encodes to the same three bytes.
     Any identifier that reaches a UTF-8 encoding (the mutation fingerprint, a backend's wire
