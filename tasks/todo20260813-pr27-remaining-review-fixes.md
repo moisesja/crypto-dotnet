@@ -31,7 +31,7 @@
   fix every confirmed finding rather than allow-listing it.
 - [x] Run Release build, focused tests, full native-present suite, no-native suite, API coverage,
   and relevant samples; update PRD/CHANGELOG/docs where the corrected contract changes wording.
-- [ ] Complete the Review section, commit intentionally on the existing branch, push to PR #27,
+- [x] Complete the Review section, commit intentionally on the existing branch, push to PR #27,
   and post a concise response with evidence. Do not merge, tag, or publish.
 
 ## Acceptance evidence
@@ -76,3 +76,7 @@ Verification evidence:
 - capable-store sample reaches its P-256 section then fails in macOS Apple Crypto module loading;
   the identical failure reproduces at pre-fix `b847152`, so it is an existing local platform
   condition rather than a regression from this patch.
+
+Implementation commit `0b629e3b306f9af81e01c90aebf92e8ef701f3c2` was pushed to PR #27.
+The GitHub connector rejected the requested update with HTTP 403; the authenticated `gh pr review`
+fallback posted the full evidence as a `COMMENTED` review on the current head.
