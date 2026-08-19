@@ -1,4 +1,1 @@
 #nullable enable
-NetCrypto.KeyMaterialReader<T>
-NetCrypto.TransferableKeyMaterial.Consume<T>(NetCrypto.KeyMaterialReader<T>! read) -> T
-NetCrypto.TransferableKeyMaterial.Discard() -> void

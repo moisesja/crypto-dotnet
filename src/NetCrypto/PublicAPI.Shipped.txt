@@ -198,6 +198,7 @@ NetCrypto.KeyInstanceId.KeyInstanceId() -> void
 NetCrypto.KeyInstanceId.KeyInstanceId(string! Value) -> void
 NetCrypto.KeyInstanceId.Value.get -> string!
 NetCrypto.KeyInstanceId.Value.init -> void
+NetCrypto.KeyMaterialReader<T>
 NetCrypto.KeyMutationKind
 NetCrypto.KeyMutationKind.Delete = 2 -> NetCrypto.KeyMutationKind
 NetCrypto.KeyMutationKind.Generate = 0 -> NetCrypto.KeyMutationKind
@@ -344,6 +345,8 @@ NetCrypto.StoredKeyInfo.MultibasePublicKey.get -> string!
 NetCrypto.StoredKeyInfo.PublicKey.get -> byte[]!
 NetCrypto.StoredKeyInfo.PublicKey.init -> void
 NetCrypto.TransferableKeyMaterial
+NetCrypto.TransferableKeyMaterial.Consume<T>(NetCrypto.KeyMaterialReader<T>! read) -> T
+NetCrypto.TransferableKeyMaterial.Discard() -> void
 NetCrypto.TransferableKeyMaterial.Dispose() -> void
 NetCrypto.TransferableKeyMaterial.IsConsumed.get -> bool
 NetCrypto.TransferableKeyMaterial.KeyType.get -> NetCrypto.KeyType
