@@ -266,3 +266,33 @@ is a non-IVT test project that *compiles* against the surface — a reflection c
 sibling instances of the same pattern (here: `KeyPair.WithPrivateKey<T>` holds its `_gate` across
 its callback too) even when out of the current scope.
 → See [[L11]], [[L13]]; FR-7b rule 14, NFR-3, NFR-6.
+
+## L15 — "Deferred" must not mean "observably not done"; and a regression test must fail, not hang
+
+The PR #29 review found four blockers in work I had already run two adversarial passes over.
+Each is a distinct pattern worth keeping:
+
+1. **Latch state is part of the observable contract; only physics may defer.** My
+   `Dispose`-during-a-live-read branch deferred *everything* to the reader's `finally` — so for
+   the whole parked window the object claimed `IsConsumed == false`, served metadata, and threw
+   the wrong exception type, directly contradicting its own docs ("by the time this call's
+   effect can be observed, the state it promises already holds" — false, and I wrote it). The
+   fix that respects both constraints: take the terminal *state* transition immediately; defer
+   only the *physical* wipe that would corrupt the live borrow. When you defer an effect, split
+   it into state and physics and ask which half callers can observe in between.
+2. **A concurrency regression test must be built to fail on regression, not to hang.** Bounded
+   joins are not enough: foreground worker threads that re-deadlock keep the testhost alive
+   after the assertion fails. Background threads + captured worker exceptions re-asserted on the
+   test thread.
+3. **A test double must honor the same contract it demonstrates.** My external store keyed
+   "replay" off duplicate alias, ignoring the `(Namespace, Kind, OperationId)` identity — the
+   test passed while teaching implementors the wrong idempotency model. A reference-shaped test
+   double is documentation; give it the real ledger/fingerprint shape or don't claim the term.
+4. **A test's name and its `because` strings are claims — audit them like docs.** "Exposes no
+   read path" survived a PR whose whole point was adding a read path (the name filter just
+   didn't match "Consume"); "only contract exceptions escape" was certified by readers that only
+   threw already-allowed types. When a change alters a premise, grep the tests for the premise's
+   *words*, not just its members.
+
+→ Adversarial passes probe what code *does*; reviews also probe what code *claims*. Both were
+needed here. FR-7b rules 5/7/14; [`adversarial-pass`](../.claude/skills/adversarial-pass/SKILL.md).
