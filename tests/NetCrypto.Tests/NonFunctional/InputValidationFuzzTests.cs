@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Security.Cryptography;
 using FluentAssertions;
 
@@ -301,6 +302,45 @@ public class InputValidationFuzzTests
         AssertKeyStoreContract("TransferableKeyMaterial.FromRawKey", $"{Shape(size)} material ({keyType})",
             () => TransferableKeyMaterial.FromRawKey(keyType, bytes, bytes).Dispose());
     }
+
+    /// <summary>
+    /// The family-(c) input for <see cref="TransferableKeyMaterial.Consume{T}"/>: the reader is a
+    /// non-null, perfectly well-formed delegate that behaves badly. Since #28 published
+    /// <c>Consume</c>, that delegate is third-party code, so "what does a hostile reader get out
+    /// of this" is an input-validation question and not only an adversarial one. Whatever it
+    /// does, two things must hold on every exit path: only contract exception types escape, and
+    /// the pinned secret is wiped.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(HostileReaders))]
+    public void TransferableKeyMaterial_HostileReader_StaysInContractAndAlwaysWipes(
+        string description, Action<TransferableKeyMaterial> reader)
+    {
+        using var pair = new DefaultKeyGenerator().Generate(KeyType.Ed25519);
+        var material = TransferableKeyMaterial.FromKeyPair(pair);
+        var backing = (byte[])typeof(TransferableKeyMaterial)
+            .GetField("_privateKey", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(material)!;
+
+        AssertKeyStoreContract("TransferableKeyMaterial.Consume", description, () => reader(material));
+
+        material.IsConsumed.Should().BeTrue($"a {description} still spends the material");
+        backing.Should().OnlyContain(b => b == 0, $"a {description} must not leave the secret live");
+    }
+
+    public static TheoryData<string, Action<TransferableKeyMaterial>> HostileReaders() => new()
+    {
+        { "reader that throws", m => m.Consume<int>((_, _, _) => throw new InvalidOperationException("boom")) },
+        { "reader that re-enters Consume", m => m.Consume((_, _, _) => m.Consume((_, _, _) => 0)) },
+        { "reader that disposes the material", m => m.Consume((_, _, _) => { m.Dispose(); return 0; }) },
+        { "reader that discards the material", m => m.Consume((_, _, _) => { m.Discard(); return 0; }) },
+        { "reader that returns the private span as an array", m => m.Consume((_, _, priv) => priv.ToArray().Length) },
+        { "reader that re-enters and then throws", m => m.Consume<int>((_, _, _) =>
+            {
+                try { m.Consume((_, _, _) => 0); } catch (InvalidOperationException) { }
+                throw new InvalidOperationException("boom");
+            }) },
+    };
 
     private static string Describe(string value) =>
         value.Length > 32 ? $"<{value.Length} chars>" : value.Replace("\0", "\\0").Replace("\n", "\\n");

@@ -6,11 +6,23 @@ namespace NetCrypto;
 /// Reads key material out of a <see cref="TransferableKeyMaterial"/> exactly once, at the
 /// moment a store accepts it. This is the store-side acceptance path — the one sanctioned
 /// read the type exists to gate. It is public so that key stores implemented outside this
-/// assembly (an HSM, KMS, or Vault-backed <see cref="ICapableKeyStore"/>) can accept
-/// imports at all (#28); the once-only latch and zeroization in
-/// <see cref="TransferableKeyMaterial.Consume{T}"/> hold for every caller, so publishing
-/// the delegate creates no second read and no export surface.
+/// assembly (an HSM, KMS, or Vault-backed <see cref="ICapableKeyStore"/>) can accept imports
+/// at all (#28); the once-only latch and zeroization in
+/// <see cref="TransferableKeyMaterial.Consume{T}"/> hold for every caller.
 /// </summary>
+/// <remarks>
+/// <para>
+/// Two duties belong to the reader, not to this type. It must not let
+/// <paramref name="privateKey"/>, nor any pointer or reference into it, outlive the call. The
+/// buffer is zeroized the moment the call returns, so a normal copy taken inside the call is the
+/// only safe way to keep the value, and that copy is the reader's own to wipe. A retained
+/// pointer is worse than useless: it reads zeros immediately, but the pinned buffer's address is
+/// later reused for other materials' live secrets, so a stale pointer becomes a read into
+/// somebody else's key. And the reader must not call back into the material it is reading: a
+/// nested <see cref="TransferableKeyMaterial.Consume{T}"/> is refused with
+/// <see cref="InvalidOperationException"/>.
+/// </para>
+/// </remarks>
 /// <typeparam name="T">The reader's result type.</typeparam>
 /// <param name="keyType">The type of the transferred key.</param>
 /// <param name="publicKey">The raw public key bytes.</param>
@@ -35,10 +47,19 @@ public delegate T KeyMaterialReader<out T>(
 /// </para>
 /// <para>
 /// The secret lives in a pinned buffer (the FR-18 zeroization infrastructure, so a compacting
-/// GC cannot duplicate it before the wipe), is read exactly once through an internal accessor
-/// at the instant the store accepts it, and is then zeroized while the instance latches
-/// permanently unreadable. Every member except <see cref="IsConsumed"/> throws
+/// GC cannot duplicate it before the wipe), is read exactly once through
+/// <see cref="Consume{T}"/> at the instant the store accepts it, and is then zeroized while the
+/// instance latches permanently unreadable. Every member except <see cref="IsConsumed"/> throws
 /// <see cref="ObjectDisposedException"/> afterwards.
+/// </para>
+/// <para>
+/// <b>A live instance is a bearer secret.</b> <see cref="Consume{T}"/> is public so that a store
+/// written outside this assembly can accept an import at all (#28), which means the read is
+/// available to <em>whoever holds the instance</em> — including anything a
+/// <see cref="KeyImportRequest"/> is routed through on its way to the store, such as a DI
+/// decorator or a logging wrapper. What the type guarantees is that the read happens at most
+/// once and destroys the material; it cannot guarantee <em>who</em> performs it. Hand the
+/// instance straight to the store you mean to trust, and construct it as late as possible.
 /// </para>
 /// <para>
 /// <b>Failure before acceptance leaves it usable.</b> A validation failure, an idempotency
@@ -72,6 +93,10 @@ public sealed class TransferableKeyMaterial : IDisposable
     private readonly byte[] _privateKey;
     private readonly KeyType _keyType;
     private bool _consumed;
+    // True for the span of a reader callback. Set and cleared under _gate, but the reader runs
+    // with _gate released, so this is how a concurrent Consume or Dispose on another thread
+    // learns a read is live: Consume refuses, Dispose defers its wipe to the reader's finally.
+    private bool _reading;
 
     private TransferableKeyMaterial(KeyType keyType, ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> privateKey)
     {
@@ -212,6 +237,14 @@ public sealed class TransferableKeyMaterial : IDisposable
         {
             if (_consumed)
                 return;
+            // A read is live (this lock is free because Consume runs the reader with _gate
+            // released — whether the caller is that reader, re-entering, or another thread).
+            // Wiping now would blank the buffers the in-flight read is still borrowing and hand
+            // the accepting store an all-zero key. Defer instead: Consume's finally wipes and
+            // latches on the way out regardless, so by the time this call's effect can be
+            // observed, the state it promises already holds.
+            if (_reading)
+                return;
             _consumed = true;
             CryptographicOperations.ZeroMemory(_privateKey);
             CryptographicOperations.ZeroMemory(_publicKey);
@@ -228,29 +261,83 @@ public sealed class TransferableKeyMaterial : IDisposable
     /// <summary>
     /// The store-side acceptance path: reads the material exactly once, then zeroizes it and
     /// latches this instance unreadable — atomically, so the "readable once" guarantee holds
-    /// even if the reader throws. Public for out-of-assembly store implementations (#28):
-    /// the caller of this method is by definition the accepting store — the party the
-    /// material was created to be handed to — and every guarantee (once-only, zeroize,
-    /// <see cref="IsConsumed"/> latch) is enforced here regardless of the caller. A store
-    /// that copies the spans owns its copy's zeroization.
+    /// even if the reader throws.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Public for out-of-assembly store implementations (#28). Every guarantee — once-only,
+    /// zeroize, the <see cref="IsConsumed"/> latch — is enforced by this method body and so
+    /// holds for every caller; see the type's remarks for what widening the accessibility does
+    /// and does not change. A store that copies the spans owns its copy's zeroization.
+    /// </para>
+    /// <para>
+    /// <b>The reader runs outside the instance's lock,</b> so a reader is free to take its own
+    /// locks without splicing this type into its lock order — a store whose reader records the
+    /// key under the store's mutex, while another thread disposes the material under that same
+    /// mutex, does not deadlock.
+    /// </para>
+    /// <para>
+    /// <b>The reader must not re-enter.</b> A nested <see cref="Consume{T}"/> on this instance —
+    /// or a concurrent one from another thread while a read is live — is refused rather than
+    /// served: it would be a second read of one-read material and would race the wipe against
+    /// the buffers the live read is borrowing. Reading <see cref="KeyType"/> or
+    /// <see cref="PublicKey"/> from inside a reader is fine, and a <see cref="Dispose"/> that
+    /// arrives during a read is honored by the wipe this call performs on the way out.
+    /// </para>
+    /// </remarks>
+    /// <typeparam name="T">The reader's result type — in practice the store's own key handle.</typeparam>
+    /// <param name="read">The store's acceptance path. Invoked at most once — exactly once when this method does not throw before the read.</param>
+    /// <returns>Whatever <paramref name="read"/> produced.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="read"/> is <c>null</c>.</exception>
+    /// <exception cref="ObjectDisposedException">The material has already been consumed or disposed.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Another read of this instance is already in progress — a re-entrant call from inside the
+    /// reader, or a concurrent call from another thread. Note <see cref="ObjectDisposedException"/>
+    /// derives from this type, and both refusals are terminal (the material is single-use), so a
+    /// caller that needs to tell them apart must test for <see cref="ObjectDisposedException"/>
+    /// first — neither is a "busy, retry later" signal.
+    /// </exception>
     public T Consume<T>(KeyMaterialReader<T> read)
     {
         ArgumentNullException.ThrowIfNull(read);
 
+        // Claim the single read under the lock, then run the reader OUTSIDE it. The reader is
+        // now arbitrary out-of-assembly code (#28), and a store's reader will take the store's
+        // own lock; holding _gate across that call would splice _gate into the application's
+        // lock order and let an ordinary two-lock cycle deadlock — with the secret then stranded
+        // un-wiped in the pinned buffer. So _gate guards only the state transitions and the
+        // wipe, never a call into caller code.
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_consumed, this);
-            try
+            // FR-7b rule 14: no reader may re-enter the read it is inside. Because the claim
+            // above is exclusive, this same flag also turns away a concurrent Consume from
+            // another thread — both would be a second read of the one-read material, and both
+            // would race the wipe against the live borrow. Refused, not blocked: blocking here
+            // would mean waiting on a lock the in-flight reader's own lock may depend on.
+            if (_reading)
+                throw new InvalidOperationException(
+                    "A key material reader re-entered Consume while a read of this material was " +
+                    "already in progress. The read-once guarantee and the buffers borrowed by " +
+                    "that read both depend on the reader not calling back into the material.");
+
+            _reading = true;
+            ReadCount++;
+        }
+
+        try
+        {
+            return read(_keyType, _publicKey, _privateKey);
+        }
+        finally
+        {
+            lock (_gate)
             {
-                ReadCount++;
-                return read(_keyType, _publicKey, _privateKey);
-            }
-            finally
-            {
-                // Latch inside the finally: material that has been exposed to a store is spent
-                // whether or not the store's own ingestion completed. Anything else would let a
-                // failing reader hand the caller a second read.
+                _reading = false;
+                // Latch here, not before the read: material that has been exposed to a store is
+                // spent whether or not the store's own ingestion completed. Anything else would
+                // let a failing reader hand the caller a second read. A Dispose that arrived
+                // during the read deferred to exactly this wipe.
                 _consumed = true;
                 CryptographicOperations.ZeroMemory(_privateKey);
                 CryptographicOperations.ZeroMemory(_publicKey);
@@ -265,6 +352,11 @@ public sealed class TransferableKeyMaterial : IDisposable
     /// Public alongside <see cref="Consume{T}"/> (#28) so external stores can honor the
     /// replay rule.
     /// </summary>
+    /// <remarks>
+    /// An alias for <see cref="Dispose"/>, and idempotent and non-throwing on the same terms:
+    /// safe on already-consumed material, and deferred to the in-flight wipe if called from
+    /// inside a reader.
+    /// </remarks>
     public void Discard() => Dispose();
 
     // Pinned so the canonical secret cannot be relocated (and thereby duplicated) by a

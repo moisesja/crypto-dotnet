@@ -14,10 +14,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outside this assembly (an HSM-, KMS-, or Vault-backed `ICapableKeyStore`) can accept
   routed imports at all. Previously the owner's only read path was `internal` with
   `InternalsVisibleTo` limited to `NetCrypto.Tests`, so the only import-capable store
-  that could exist was the in-assembly `CapableInMemoryKeyStore`. Semantics are
-  unchanged: the once-only latch, zeroization in `finally`, the `IsConsumed` signal, and
-  the replay-path `Discard` all hold for every caller; no export surface is added — the
-  accepting store was always the intended reader. (#28)
+  that could exist was the in-assembly `CapableInMemoryKeyStore`. The once-only latch,
+  zeroization in `finally`, the `IsConsumed` signal, and the replay-path `Discard` all
+  hold for every caller, and no export format or second read is added. What the widening
+  does change is the threat model, now stated in the type's own docs and PRD FR-7b rule
+  7: a live instance is a **bearer secret**, readable by whoever holds it — including
+  anything a `KeyImportRequest` is routed through, such as a DI decorator or logging
+  wrapper. Construct it late and hand it straight to the store you mean to trust. (#28)
+
+### Fixed
+
+- **A key material reader no longer runs while the material's lock is held**, so it can take
+  its own locks without deadlocking. Because publishing `Consume` (above) makes the reader
+  arbitrary out-of-assembly code, and a real store's reader takes the store's own mutex, holding
+  the instance lock across that call spliced the instance into the application's lock order: an
+  ordinary two-lock cycle (thread A reads while holding the store mutex; thread B disposes the
+  material while holding that mutex) deadlocked both threads and left the secret **stranded
+  un-wiped in the pinned buffer** for the process lifetime. The reader now runs with the lock
+  released — the lock guards only the state transitions and the zeroization — which also keeps
+  `IsConsumed` and `Dispose` responsive while a read is in flight and turns a cross-thread
+  re-entry into the same refusal as a same-thread one. Surfaced by the adversarial pass; the
+  path became reachable only by publishing `Consume` in this release, so no shipped version was
+  exposed. (#28)
+- **A key material reader can no longer re-enter `Consume`.** `Monitor` is reentrant and
+  the consumption latch only closes on the way out, so a reader that called `Consume`
+  again on the material it was reading took a *second* read (the internal read counter
+  reached 2, against a contract of "never exceeds one") and zeroized the pinned buffers
+  the outer read was still borrowing — leaving the accepting store to commit an
+  **all-zero key**. The nested call is now refused with `InvalidOperationException`, and
+  a re-entrant `Dispose()`/`Discard()` defers to the wipe the in-flight `Consume`
+  already performs, so it stays idempotent and non-throwing. Reading `KeyType` or
+  `PublicKey` from inside a reader is unaffected. This is PRD FR-7b rule 14 applied to
+  the import reader; the path became reachable only by publishing `Consume` in this
+  release, so no shipped version was exposed. (#28)
 
 ## [1.6.0] - 2026-08-13
 

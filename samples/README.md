@@ -24,7 +24,7 @@ e.g. `dotnet run --project samples/NetCrypto.Samples.Keys`.
 | `NetCrypto.Samples.Jwk` | `JwkConverter`: mapping NetCrypto's raw key model to and from RFC 7517 `JsonWebKey`. |
 | `NetCrypto.Samples.EvmSigning` | Recoverable secp256k1 signatures for Ethereum: signing a digest, recovering the public key/address, the raw recovery-id boundary (PRD FR-12), and the `IRecoverableDigestSigner` abstraction for key-store/HSM-held keys. |
 | `NetCrypto.Samples.Bbs` | BBS signatures (BLS12-381) for selective disclosure: multi-message signing, proof derivation, and proof verification. |
-| `NetCrypto.Samples.CapableKeyStore` | `ICapableKeyStore` — the custody-boundary contract: capability discovery, namespace scoping, immutable `KeyInstanceId`s, idempotent mutations with durable receipts, algorithm/encoding-bearing signing, one-way import via `TransferableKeyMaterial`, BBS by reference, and the portable `KeyStoreException` taxonomy. |
+| `NetCrypto.Samples.CapableKeyStore` | `ICapableKeyStore` — the custody-boundary contract: capability discovery, namespace scoping, immutable `KeyInstanceId`s, idempotent mutations with durable receipts, algorithm/encoding-bearing signing, one-way import via `TransferableKeyMaterial` (both halves: the caller's transfer and the store's `Consume`/`Discard` acceptance path), BBS by reference, and the portable `KeyStoreException` taxonomy. |
 | `NetCrypto.Samples.DependencyInjection` | `AddNetCrypto()` wiring all default providers into `Microsoft.Extensions.DependencyInjection`, with application code depending only on interfaces. |
 
 ## Start here — suggested reading order

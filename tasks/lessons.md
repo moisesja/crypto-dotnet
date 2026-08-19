@@ -235,3 +235,34 @@ documented caller-input signal applies — not by a hopeful list of concrete exc
 snapshot for validation and pass the dependency a separate copy. Treat every exception thrown
 inside the dependency call as backend-originated except narrowly specified caller-input contracts.
 NFR-6, NFR-3; [`adversarial-pass`](../.claude/skills/adversarial-pass/SKILL.md).
+
+## L14 — Publishing an `internal` member is a threat-model change, not an accessibility tweak
+
+PR #29 (issue #28) widened `TransferableKeyMaterial.Consume`/`Discard`/`KeyMaterialReader` from
+`internal` to `public`. The inherited PR framed it as "additive, behavior unchanged" and shipped
+it with no test, a red CI (FR-17 coverage: `KeyMaterialReader`/`Discard` appeared in no sample;
+`Consume` passed only because `IsConsumed` contains the substring), and no adversarial pass —
+"just an accessibility widening" was treated as a waiver.
+
+It was not. Making the reader delegate public means the callback is now **arbitrary
+out-of-assembly code**, so every assumption the type made about *who* runs the reader is void.
+Two hazards that were unreachable while the sole caller was the in-assembly reference store
+became reachable at once: (1) `Consume` invoked the reader while holding the instance's private
+lock, so a store reader taking its own lock deadlocked against a concurrent `Dispose` under that
+lock — and left the secret **un-wiped in the pinned buffer** for the process lifetime; (2) the
+latch closed only in the `finally`, so a re-entrant reader took a second read and zeroized the
+buffers the outer read was still borrowing. The adversarial pass found both; the deadlock was
+reproduced as a standalone console program, and the fix (run the reader with the lock released)
+verified by reverting `Consume` in place and watching the bounded-wait regression tests fail.
+
+→ Rule: when a change widens accessibility on anything that invokes a caller callback, holds a
+lock across a callback, latches state in a `finally`, or hands out spans/pointers, run the
+`adversarial-pass` **and** the `input-validation-sweep` against the *new* caller population — the
+untrusted third party — before declaring done. "Additive / behavior unchanged / thin wrapper" is
+the trigger to run the gates, never a reason to skip them. Prove the acceptance criterion the way
+the issue states it: issue #28 said "an external assembly **not on the IVT list**", so the proof
+is a non-IVT test project that *compiles* against the surface — a reflection check inside
+`NetCrypto.Tests` would pass even if the members were re-narrowed behind a wider IVT. Also flag
+sibling instances of the same pattern (here: `KeyPair.WithPrivateKey<T>` holds its `_gate` across
+its callback too) even when out of the current scope.
+→ See [[L11]], [[L13]]; FR-7b rule 14, NFR-3, NFR-6.

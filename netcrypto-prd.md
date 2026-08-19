@@ -208,8 +208,12 @@ is source- and binary-compatible):**
 - Results and receipts: `KeyMutationResult`, `KeyDeleteResult`, `enum KeyMutationKind`, abstract
   `KeyMutationOutcome` with the closed set `KeyGeneratedOutcome` / `KeyImportedOutcome` /
   `KeyDeletionOutcome`.
-- `TransferableKeyMaterial` — one-way, single-use import owner with **no** private-key read,
-  format, or export surface.
+- `TransferableKeyMaterial` — one-way, single-use import owner with **no** private-key getter,
+  format, or export surface. Its one sanctioned read is the store-side `Consume<T>` accessor
+  (with the `KeyMaterialReader<T>` delegate and `Discard()`), **public since 1.7.0** — while it
+  was internal the only import-capable store that could exist was the in-assembly
+  `CapableInMemoryKeyStore`, so no third party could implement the contract's import half at
+  all (issue #28).
 - `KeyStoreException` + `enum KeyStoreError { Unsupported, IdempotencyConflict, AccessDenied,
   Throttled, Unavailable, OutcomeUnknown }`, with `RetryAfter`.
 - `ICapableKeyStore : IKeyStore, IKeyStoreCapabilityProvider` — `NamespaceId`, the three
@@ -270,9 +274,15 @@ precisely so that it can — but must never reuse one of these for different obs
    reader; an `OutcomeUnknown` **import** is reconciled through the outcome reader **only** —
    private material is never resubmitted.
 7. **Import transfers ownership exactly once.** `TransferableKeyMaterial` is a dedicated,
-   exclusive, disposable owner with no read/format/export surface, holding the secret in a pinned
-   buffer per FR-18. Before acceptance, failure leaves the still-usable owner with the caller
-   (exactly one retry); at acceptance — including accepted-but-ack-lost — the caller's object
+   exclusive, disposable owner with no getter/format/export surface, holding the secret in a
+   pinned buffer per FR-18. The store's acceptance path is `Consume<T>`, which reads the material
+   at most once and destroys it on the way out — it is public (1.7.0) because an out-of-assembly
+   `ICapableKeyStore` must be able to perform the read that transfers ownership. Publishing it
+   adds no export format and no second read, but it does make a live instance a **bearer
+   secret**: the read is available to whoever holds the instance, including anything a
+   `KeyImportRequest` is routed through. Callers construct it as late as possible and hand it
+   straight to the store they mean to trust. Before acceptance, failure leaves the still-usable
+   owner with the caller (exactly one retry); at acceptance — including accepted-but-ack-lost — the caller's object
    becomes permanently unreadable and the buffer is zeroized, leaving no extra plaintext copy. A
    recognized **replay destroys the material without reading it**, so the "never resubmit private
    material" rule holds even on the retry path. Import support is optional: a store that does not
@@ -331,10 +341,23 @@ correct):
     from the transferred secret and rejects a mismatch before commit; the transfer is spent either
     way, because the store has already seen the secret. Wrong-length material is refused at
     `TransferableKeyMaterial` construction, before it ever crosses the boundary.
-14. **A provider must not re-enter the store.** `Monitor` is reentrant, so a provider callback
-    would otherwise pass straight through the backend lock — and a nested delete zeroizes the
-    pinned buffer an in-flight private-key borrow is still reading. Re-entry on the same thread is
-    refused.
+14. **A callback must not re-enter what invoked it, and untrusted callback code must not run
+    under a private lock.** `Monitor` is reentrant, so a provider callback would otherwise pass
+    straight through the backend lock — and a nested delete zeroizes the pinned buffer an
+    in-flight private-key borrow is still reading. Re-entry on the same thread is refused. The
+    same rule governs the import reader that 1.7.0 published (`KeyMaterialReader<T>` via
+    `Consume`): a reader that calls `Consume` again on the material it is reading — or a
+    concurrent `Consume` from another thread while a read is live — is refused, because the second
+    read would both break read-exactly-once (the read counter reaches 2) and zeroize the buffers
+    the live read is borrowing, leaving the accepting store to commit an **all-zero key**.
+    Beyond re-entry, `Consume` runs the reader with the material's own lock **released**: the
+    reader is now arbitrary out-of-assembly code that will take the store's lock, so holding the
+    material lock across the call would splice it into the application's lock order, and an
+    ordinary two-lock cycle (a read under the store lock racing a `Dispose` under the store lock)
+    would deadlock — stranding the secret un-wiped in the pinned buffer. The lock guards only the
+    state transitions and the wipe. Both hazards became reachable only when 1.7.0 published
+    `Consume`; while it was internal the sole caller was the reference store, whose reader neither
+    re-enters nor takes a conflicting lock.
 
 **Reference implementation.** `CapableInMemoryKeyStore` implements all of it end to end, over a
 shared `InMemoryKeyStoreBackend` (keys keyed by `(namespace, alias)`, mutation ledger keyed by

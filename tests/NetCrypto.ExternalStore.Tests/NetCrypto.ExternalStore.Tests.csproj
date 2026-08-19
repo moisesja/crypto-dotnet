@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Issue #28. This project's NAME is the assertion: NetCrypto grants
+       InternalsVisibleTo("NetCrypto.Tests") and nothing else, so this assembly sees exactly the
+       public surface a third-party ICapableKeyStore implementor sees. If Consume/Discard/
+       KeyMaterialReader ever narrow back to internal, this project stops COMPILING — which is
+       the only way to catch that regression, since a test living in NetCrypto.Tests would keep
+       passing through the IVT grant. Do not add this assembly to the IVT list. -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/NetCrypto/NetCrypto.csproj" />
+  </ItemGroup>
+
+</Project>

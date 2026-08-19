@@ -208,6 +208,41 @@ using (var unused = TransferableKeyMaterial.FromRawKey(
 }
 
 // -------------------------------------------------------
+// 5b. The other side of the transfer: what a store's acceptance path looks like
+// -------------------------------------------------------
+// Everything above is the *caller's* half. This is the half an ICapableKeyStore implements —
+// including one written outside this library, against an HSM, a KMS, or Vault. The store never
+// receives a getter: it supplies a KeyMaterialReader<T> and NetCrypto hands the material to it
+// exactly once, then zeroizes the buffer and latches the caller's object unreadable, whether or
+// not the reader below succeeded.
+Console.WriteLine("\n=== 5b. The store-side acceptance path ===");
+
+using var arriving = keyGenerator.Generate(KeyType.Ed25519);
+var arrivingMaterial = TransferableKeyMaterial.FromKeyPair(arriving);
+
+// A real custody backend wraps here (AES-KWP under the custodian's wrapping key) and ships the
+// ciphertext. What matters for the contract is the shape: the private bytes are a
+// ReadOnlySpan<byte> that is valid only for this call, and any copy the store keeps is the
+// store's own to zeroize. The reader must not call back into the material it is reading.
+// A real store also derives the public key from these bytes here and rejects a mismatch
+// (README implementor rule 13) — inside the reader is the only place it still can.
+KeyMaterialReader<string> acceptIntoCustody = (keyType, publicKey, privateKey) =>
+    $"wrapped {keyType} secret ({privateKey.Length} bytes) for public key of {publicKey.Length} bytes";
+
+string custodyReceipt = arrivingMaterial.Consume(acceptIntoCustody);
+
+Console.WriteLine($"  Store read the material once: {custodyReceipt}");
+Console.WriteLine($"  Caller's object afterwards: consumed={arrivingMaterial.IsConsumed}");
+
+// The replay path. A store that recognizes an already-applied import must NOT read the secret
+// again — but must not leave a live copy with the caller either. Discard() is that: destroy
+// without reading.
+using var replayedKey = keyGenerator.Generate(KeyType.Ed25519);
+var replayedMaterial = TransferableKeyMaterial.FromKeyPair(replayedKey);
+replayedMaterial.Discard();
+Console.WriteLine($"  Replay path — Discard() destroyed it unread: consumed={replayedMaterial.IsConsumed}");
+
+// -------------------------------------------------------
 // 6. BBS multi-message signing by reference
 // -------------------------------------------------------
 Console.WriteLine("\n=== 6. BBS by reference ===");
