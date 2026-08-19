@@ -4,15 +4,19 @@ namespace NetCrypto;
 
 /// <summary>
 /// Reads key material out of a <see cref="TransferableKeyMaterial"/> exactly once, at the
-/// moment a store accepts it. Internal by design: the whole point of the type is that no
-/// caller-reachable read path exists.
+/// moment a store accepts it. This is the store-side acceptance path — the one sanctioned
+/// read the type exists to gate. It is public so that key stores implemented outside this
+/// assembly (an HSM, KMS, or Vault-backed <see cref="ICapableKeyStore"/>) can accept
+/// imports at all (#28); the once-only latch and zeroization in
+/// <see cref="TransferableKeyMaterial.Consume{T}"/> hold for every caller, so publishing
+/// the delegate creates no second read and no export surface.
 /// </summary>
 /// <typeparam name="T">The reader's result type.</typeparam>
 /// <param name="keyType">The type of the transferred key.</param>
 /// <param name="publicKey">The raw public key bytes.</param>
 /// <param name="privateKey">The raw private key bytes, valid only for the duration of the call.</param>
 /// <returns>Whatever the reader produces — in practice, the store's own key representation.</returns>
-internal delegate T KeyMaterialReader<out T>(
+public delegate T KeyMaterialReader<out T>(
     KeyType keyType, ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> privateKey);
 
 /// <summary>
@@ -224,9 +228,13 @@ public sealed class TransferableKeyMaterial : IDisposable
     /// <summary>
     /// The store-side acceptance path: reads the material exactly once, then zeroizes it and
     /// latches this instance unreadable — atomically, so the "readable once" guarantee holds
-    /// even if the reader throws.
+    /// even if the reader throws. Public for out-of-assembly store implementations (#28):
+    /// the caller of this method is by definition the accepting store — the party the
+    /// material was created to be handed to — and every guarantee (once-only, zeroize,
+    /// <see cref="IsConsumed"/> latch) is enforced here regardless of the caller. A store
+    /// that copies the spans owns its copy's zeroization.
     /// </summary>
-    internal T Consume<T>(KeyMaterialReader<T> read)
+    public T Consume<T>(KeyMaterialReader<T> read)
     {
         ArgumentNullException.ThrowIfNull(read);
 
@@ -254,8 +262,10 @@ public sealed class TransferableKeyMaterial : IDisposable
     /// Destroys the material without reading it — used when a store recognizes a replayed
     /// import and therefore must not read the secret at all, yet should not leave a live copy
     /// with the caller either. Distinct from <see cref="Consume{T}"/>: nothing is read.
+    /// Public alongside <see cref="Consume{T}"/> (#28) so external stores can honor the
+    /// replay rule.
     /// </summary>
-    internal void Discard() => Dispose();
+    public void Discard() => Dispose();
 
     // Pinned so the canonical secret cannot be relocated (and thereby duplicated) by a
     // compacting GC between construction and the wipe — same guarantee KeyPair makes.
