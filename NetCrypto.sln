@@ -39,6 +39,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ApiCoverageCheck", "tools\A
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NetCrypto.Samples.CapableKeyStore", "samples\NetCrypto.Samples.CapableKeyStore\NetCrypto.Samples.CapableKeyStore.csproj", "{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NetCrypto.ExternalStore.Tests", "tests\NetCrypto.ExternalStore.Tests\NetCrypto.ExternalStore.Tests.csproj", "{7EB6D7B5-34E1-4F9B-9516-6A5A09224A59}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -217,6 +219,18 @@ Global
 		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}.Release|x64.Build.0 = Release|Any CPU
 		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}.Release|x86.ActiveCfg = Release|Any CPU
 		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE}.Release|x86.Build.0 = Release|Any CPU
+		{7EB6D7B5-34E1-4F9B-9516-6A5A09224A59}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7EB6D7B5-34E1-4F9B-9516-6A5A09224A59}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7EB6D7B5-34E1-4F9B-9516-6A5A09224A59}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{7EB6D7B5-34E1-4F9B-9516-6A5A09224A59}.Debug|x64.Build.0 = Debug|Any CPU
+		{7EB6D7B5-34E1-4F9B-9516-6A5A09224A59}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{7EB6D7B5-34E1-4F9B-9516-6A5A09224A59}.Debug|x86.Build.0 = Debug|Any CPU
+		{7EB6D7B5-34E1-4F9B-9516-6A5A09224A59}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7EB6D7B5-34E1-4F9B-9516-6A5A09224A59}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7EB6D7B5-34E1-4F9B-9516-6A5A09224A59}.Release|x64.ActiveCfg = Release|Any CPU
+		{7EB6D7B5-34E1-4F9B-9516-6A5A09224A59}.Release|x64.Build.0 = Release|Any CPU
+		{7EB6D7B5-34E1-4F9B-9516-6A5A09224A59}.Release|x86.ActiveCfg = Release|Any CPU
+		{7EB6D7B5-34E1-4F9B-9516-6A5A09224A59}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -236,5 +250,6 @@ Global
 		{B78FD929-99EC-4025-92EB-76EEF519D2FC} = {5D20AA90-6969-D8BD-9DCD-8634F4692FDA}
 		{334FBC80-0913-4648-8498-43C690B4032A} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 		{BF9AF3A4-72FB-4EAD-8477-276BDB89C0EE} = {5D20AA90-6969-D8BD-9DCD-8634F4692FDA}
+		{7EB6D7B5-34E1-4F9B-9516-6A5A09224A59} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

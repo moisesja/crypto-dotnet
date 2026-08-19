@@ -20,19 +20,65 @@ public class TransferableKeyMaterialTests
 
     // --- the type itself ---
 
+    /// <summary>
+    /// Since #28 the type deliberately has ONE caller-reachable read path — the delegate-
+    /// mediated <see cref="TransferableKeyMaterial.Consume{T}"/> — so the invariant to pin is
+    /// not "no read path" but its two halves: no getter/format/export member for private
+    /// material, and no second read-shaped member beyond the sanctioned pair.
+    /// </summary>
     [Fact]
-    public void ExposesNoReadPathForPrivateMaterial()
+    public void TheOnlyReadPathIsConsume_AndThereIsNoGetterFormatOrExportSurface()
     {
-        var forbidden = typeof(TransferableKeyMaterial)
-            .GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
+        var members = typeof(TransferableKeyMaterial)
+            .GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly);
+
+        members
             .Select(m => m.Name)
             .Where(name => name.Contains("Private", StringComparison.OrdinalIgnoreCase)
                 || name.Contains("Export", StringComparison.OrdinalIgnoreCase)
                 || name.Contains("Jwk", StringComparison.OrdinalIgnoreCase)
                 || name.Contains("Secret", StringComparison.OrdinalIgnoreCase))
-            .ToList();
+            .Should().BeEmpty("private material has no getter, no formatting, and no export member");
 
-        forbidden.Should().BeEmpty("the whole point is that no caller-reachable read path exists");
+        // Preserve multiplicity: projecting to distinct names would let a second Consume
+        // overload — and therefore a second read path — hide behind the sanctioned name.
+        var methods = members.OfType<MethodInfo>().Where(method => !method.IsSpecialName).ToArray();
+        methods.Select(method => method.Name).Should().BeEquivalentTo(
+            [nameof(TransferableKeyMaterial.FromKeyPair), nameof(TransferableKeyMaterial.FromRawKey),
+             nameof(TransferableKeyMaterial.Dispose), nameof(TransferableKeyMaterial.Consume),
+             nameof(TransferableKeyMaterial.Discard)],
+            "every declared public method, including every overload, is part of the reviewed surface");
+        members.OfType<PropertyInfo>().Select(property => property.Name).Should().BeEquivalentTo(
+            [nameof(TransferableKeyMaterial.KeyType), nameof(TransferableKeyMaterial.PublicKey),
+             nameof(TransferableKeyMaterial.IsConsumed)]);
+
+        var consumeMethods = methods
+            .Where(method => method.Name == nameof(TransferableKeyMaterial.Consume))
+            .ToArray();
+        consumeMethods.Should().ContainSingle("there is exactly one sanctioned private-material read path");
+
+        var consume = consumeMethods.Single();
+        consume.IsStatic.Should().BeFalse();
+        consume.IsGenericMethodDefinition.Should().BeTrue();
+        var resultType = consume.GetGenericArguments().Should().ContainSingle().Subject;
+        consume.ReturnType.Should().Be(resultType);
+        var readParameter = consume.GetParameters().Should().ContainSingle().Subject;
+        readParameter.Name.Should().Be("read");
+        readParameter.ParameterType.IsGenericType.Should().BeTrue();
+        readParameter.ParameterType.GetGenericTypeDefinition().Should().Be(typeof(KeyMaterialReader<>));
+        readParameter.ParameterType.GetGenericArguments().Should().Equal(resultType);
+
+        var readerType = typeof(KeyMaterialReader<>);
+        var readerResultType = readerType.GetGenericArguments().Should().ContainSingle().Subject;
+        var invoke = readerType.GetMethod(nameof(KeyMaterialReader<object>.Invoke),
+            BindingFlags.Public | BindingFlags.Instance);
+        invoke.Should().NotBeNull("the sole read delegate must retain its reviewed signature");
+        invoke!.ReturnType.Should().Be(readerResultType);
+        var readerParameters = invoke.GetParameters();
+        readerParameters.Select(parameter => parameter.Name).Should().Equal(
+            "keyType", "publicKey", "privateKey");
+        readerParameters.Select(parameter => parameter.ParameterType).Should().Equal(
+            typeof(KeyType), typeof(ReadOnlySpan<byte>), typeof(ReadOnlySpan<byte>));
     }
 
     [Fact]
@@ -257,5 +303,50 @@ public class TransferableKeyMaterialTests
         capabilities.Capabilities
             .Count(c => c.Operation == KeyStoreOperation.Import)
             .Should().Be(Enum.GetValues<KeyType>().Length);
+    }
+
+    // --- re-entry into the reader (issue #28 made Consume public, so the reader is arbitrary) ---
+    //
+    // The external-assembly counterparts live in NetCrypto.ExternalStore.Tests; these two assert
+    // the internal read counter, which only an IVT'd assembly can see. That counter is the
+    // contract's own words — "never exceeds one" — so a re-entry that leaves it at 2 is the
+    // invariant breaking, not merely an odd call sequence.
+
+    [Fact]
+    public void AReaderCannotReEnterConsume_SoTheReadCountNeverExceedsOne()
+    {
+        using var pair = CapableStoreTestSupport.KeyGenerator.Generate(KeyType.Ed25519);
+        var material = TransferableKeyMaterial.FromKeyPair(pair);
+
+        Exception? nested = null;
+        material.Consume((_, _, _) =>
+        {
+            nested = Record.Exception(() => material.Consume((_, _, _) => 0));
+            return 0;
+        });
+
+        nested.Should().BeOfType<InvalidOperationException>();
+        material.ReadCount.Should().Be(1, "the contract is that this never exceeds one");
+    }
+
+    [Fact]
+    public void AReaderThatReEnters_DoesNotGetTheOuterReadsBuffersWipedUnderIt()
+    {
+        using var pair = CapableStoreTestSupport.KeyGenerator.Generate(KeyType.Ed25519);
+        var expectedPrivateKey = pair.PrivateKey;
+        var material = TransferableKeyMaterial.FromKeyPair(pair);
+        var backing = BackingPrivateKey(material);
+
+        var observed = material.Consume((_, _, privateKey) =>
+        {
+            _ = Record.Exception(() => material.Consume((_, _, _) => 0));
+            _ = Record.Exception(material.Dispose);
+            return privateKey.ToArray();
+        });
+
+        observed.Should().Equal(expectedPrivateKey,
+            "a nested call must not zeroize the pinned buffer the outer read is borrowing");
+        material.ReadCount.Should().Be(1);
+        backing.Should().OnlyContain(b => b == 0, "the wipe still happens, on the way out");
     }
 }

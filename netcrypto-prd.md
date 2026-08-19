@@ -208,8 +208,12 @@ is source- and binary-compatible):**
 - Results and receipts: `KeyMutationResult`, `KeyDeleteResult`, `enum KeyMutationKind`, abstract
   `KeyMutationOutcome` with the closed set `KeyGeneratedOutcome` / `KeyImportedOutcome` /
   `KeyDeletionOutcome`.
-- `TransferableKeyMaterial` — one-way, single-use import owner with **no** private-key read,
-  format, or export surface.
+- `TransferableKeyMaterial` — one-way, single-use import owner with **no** private-key getter,
+  format, or export surface. Its one sanctioned read is the store-side `Consume<T>` accessor
+  (with the `KeyMaterialReader<T>` delegate and `Discard()`), **public since 1.7.0** — while it
+  was internal the only import-capable store that could exist was the in-assembly
+  `CapableInMemoryKeyStore`, so no third party could implement the contract's import half at
+  all (issue #28).
 - `KeyStoreException` + `enum KeyStoreError { Unsupported, IdempotencyConflict, AccessDenied,
   Throttled, Unavailable, OutcomeUnknown }`, with `RetryAfter`.
 - `ICapableKeyStore : IKeyStore, IKeyStoreCapabilityProvider` — `NamespaceId`, the three
@@ -270,9 +274,15 @@ precisely so that it can — but must never reuse one of these for different obs
    reader; an `OutcomeUnknown` **import** is reconciled through the outcome reader **only** —
    private material is never resubmitted.
 7. **Import transfers ownership exactly once.** `TransferableKeyMaterial` is a dedicated,
-   exclusive, disposable owner with no read/format/export surface, holding the secret in a pinned
-   buffer per FR-18. Before acceptance, failure leaves the still-usable owner with the caller
-   (exactly one retry); at acceptance — including accepted-but-ack-lost — the caller's object
+   exclusive, disposable owner with no getter/format/export surface, holding the secret in a
+   pinned buffer per FR-18. The store's acceptance path is `Consume<T>`, which reads the material
+   at most once and destroys it on the way out — it is public (1.7.0) because an out-of-assembly
+   `ICapableKeyStore` must be able to perform the read that transfers ownership. Publishing it
+   adds no export format and no second read, but it does make a live instance a **bearer
+   secret**: the read is available to whoever holds the instance, including anything a
+   `KeyImportRequest` is routed through. Callers construct it as late as possible and hand it
+   straight to the store they mean to trust. Before acceptance, failure leaves the still-usable
+   owner with the caller (exactly one retry); at acceptance — including accepted-but-ack-lost — the caller's object
    becomes permanently unreadable and the buffer is zeroized, leaving no extra plaintext copy. A
    recognized **replay destroys the material without reading it**, so the "never resubmit private
    material" rule holds even on the retry path. Import support is optional: a store that does not
@@ -331,10 +341,23 @@ correct):
     from the transferred secret and rejects a mismatch before commit; the transfer is spent either
     way, because the store has already seen the secret. Wrong-length material is refused at
     `TransferableKeyMaterial` construction, before it ever crosses the boundary.
-14. **A provider must not re-enter the store.** `Monitor` is reentrant, so a provider callback
-    would otherwise pass straight through the backend lock — and a nested delete zeroizes the
-    pinned buffer an in-flight private-key borrow is still reading. Re-entry on the same thread is
-    refused.
+14. **A callback must not re-enter what invoked it, and untrusted callback code must not run
+    under a private lock.** `Monitor` is reentrant, so a provider callback would otherwise pass
+    straight through the backend lock — and a nested delete zeroizes the pinned buffer an
+    in-flight private-key borrow is still reading. Re-entry on the same thread is refused. The
+    same rule governs the import reader that 1.7.0 published (`KeyMaterialReader<T>` via
+    `Consume`): a reader that calls `Consume` again on the material it is reading — or a
+    concurrent `Consume` from another thread while a read is live — is refused, because the second
+    read would both break read-exactly-once (the read counter reaches 2) and zeroize the buffers
+    the live read is borrowing, leaving the accepting store to commit an **all-zero key**.
+    Beyond re-entry, `Consume` runs the reader with the material's own lock **released**: the
+    reader is now arbitrary out-of-assembly code that will take the store's lock, so holding the
+    material lock across the call would splice it into the application's lock order, and an
+    ordinary two-lock cycle (a read under the store lock racing a `Dispose` under the store lock)
+    would deadlock — stranding the secret un-wiped in the pinned buffer. The lock guards only the
+    state transitions and the wipe. Both hazards became reachable only when 1.7.0 published
+    `Consume`; while it was internal the sole caller was the reference store, whose reader neither
+    re-enters nor takes a conflicting lock.
 
 **Reference implementation.** `CapableInMemoryKeyStore` implements all of it end to end, over a
 shared `InMemoryKeyStoreBackend` (keys keyed by `(namespace, alias)`, mutation ledger keyed by
@@ -748,13 +771,22 @@ Any JSON handling uses `System.Text.Json` (or `Microsoft.IdentityModel.Tokens` 8
 ### NFR-3 — Input validation
 Every public method validates lengths/nulls and throws `ArgumentException`/`ArgumentNullException` with the parameter name before any crypto operation. A wrong-length raw key/scalar handed to a backend (NSec, Nethermind BLS, platform EC import) must surface as a **parameter-named `ArgumentException`**, never a leaked backend type; the fuzz-lite suite carries **no** "known deviation" allow-list, and any non-contract exception fails it rather than being pinned.
 
+**Caller-callback exception boundary.** A higher-order public method does not translate an
+exception that escapes execution of a caller-supplied delegate unless that method explicitly
+says otherwise. This includes exceptions raised by code or dependencies the delegate itself
+invokes: the API cannot and must not guess which internal call inside caller code was intended.
+The same exception instance propagates. This is a narrow execution-boundary carveout, not a type
+allow-list: exceptions raised by NetCrypto or its dependencies outside the delegate call still
+follow the rules below, and security postconditions such as single-use latching and zeroization
+must hold even when the callback throws.
+
 **Negative coverage spans three input families**, not one. Every public method that parses caller bytes carries at least one test from each applicable family:
 
 - **(a) Absent** — null, empty.
 - **(b) Wrong-shape** — wrong length, oversized, non-multiple-of-block.
 - **(c) Structurally-valid-but-semantically-wrong** — a structurally valid base64 string that is not valid base64url; an off-curve point that still parses; a coordinate that is on-curve by value but left-zero-trimmed in length; a high-S signature; an index past the message count; an oversized length *parameter*. **This is where the defects hide**, because (a) and (b) usually fail fast in obvious ways. All-zero buffers are a specific blind spot: for P-256, `x = 0` decompresses to a *valid* point, so a zero-filled "bad key" silently takes the happy path.
 
-**Forbidden leaked exception types** from any public method on any input: `IndexOutOfRangeException`, `NullReferenceException`, `System.FormatException`, `OverflowException`, `KeyNotFoundException` (where not the documented contract), and any backend or platform type (`Nethermind.Crypto.Bls+BlsException`, a platform `CryptographicException` from EC import). All must become `ArgumentException`/`ArgumentNullException` with the parameter name — or a documented `false` for verify-style methods. `CryptographicException` is reserved for genuine crypto failures and must **not** double as the catch-all for malformed input.
+**Forbidden leaked exception types** originating in NetCrypto or one of its dependencies outside a caller-supplied delegate call, from any public method on any input: `IndexOutOfRangeException`, `NullReferenceException`, `System.FormatException`, `OverflowException`, `KeyNotFoundException` (where not the documented contract), and any backend or platform type (`Nethermind.Crypto.Bls+BlsException`, a platform `CryptographicException` from EC import). All must become `ArgumentException`/`ArgumentNullException` with the parameter name — or a documented `false` for verify-style methods. `CryptographicException` is reserved for genuine crypto failures and must **not** double as the catch-all for malformed input. The caller-callback boundary above is the only general exception: anything escaping delegate execution is propagated, not "leaked" by NetCrypto.
 
 **Acceptance criteria:**
 - [ ] Per-primitive negative tests exist (each FR above includes them).

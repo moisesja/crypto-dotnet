@@ -68,7 +68,7 @@ export operation anywhere, no KDF, and no protocol semantics.
 `CapableInMemoryKeyStore` is the reference implementation and the contract oracle;
 `samples/NetCrypto.Samples.CapableKeyStore` is the worked example.
 
-If you are writing a backend adapter, these ten rules are the contract — the shape alone is not:
+If you are writing a backend adapter, these fourteen rules are the contract — the shape alone is not:
 
 1. **Discovery honesty is bidirectional.** Everything you advertise must work; everything you do
    not advertise must fail with `KeyStoreError.Unsupported` *before* any key creation, signing,
@@ -95,10 +95,15 @@ If you are writing a backend adapter, these ten rules are the contract — the s
 6. **Cancellation never lies.** Before irreversible acceptance it changes nothing and throws
    `OperationCanceledException`. After acceptance, return success, definite failure, or
    `OutcomeUnknown` — never cancellation as an implied rollback.
-7. **Import transfers ownership exactly once,** through `TransferableKeyMaterial`. Read it once
-   at acceptance; a failure before acceptance leaves it usable for exactly one retry; a
-   recognized replay must destroy it *without reading it*, because an `OutcomeUnknown` import is
-   reconciled through `GetMutationOutcomeAsync` only — private material is never resubmitted.
+7. **Import transfers ownership exactly once,** through `TransferableKeyMaterial`. Your
+   acceptance path is `material.Consume(reader)` — you supply a `KeyMaterialReader<T>`, get the
+   raw bytes as spans valid only for that call, and the material latches unreadable and zeroizes
+   on the way out whether or not your reader succeeded. Copy what you need and own wiping your
+   copy; do not let the spans escape, and do not call back into the material from inside the
+   reader (a nested `Consume` is refused). A failure before acceptance leaves it usable for
+   exactly one retry; a recognized replay must destroy it *without reading it* — that is
+   `material.Discard()` — because an `OutcomeUnknown` import is reconciled through
+   `GetMutationOutcomeAsync` only, and private material is never resubmitted.
 8. **BBS is advertised only where you can really do it,** and plain BLS signing is never
    advertised or accepted as BBS.
 9. **Bounds are finite.** Every capability carries a positive `MaxInputBytes`; `null` and `0` are
@@ -108,6 +113,27 @@ If you are writing a backend adapter, these ten rules are the contract — the s
     `RetryAfter` where the backend gives one, and let no vendor SDK exception type escape. Keep
     argument faults as parameter-named `ArgumentException` — a caller's own mistake must not be
     retried as a backend condition.
+
+The last four are integrity obligations rather than shape rules. Each was found by an
+adversarial pass against an implementation that already looked correct, so none of them is
+optional (PRD FR-7b, obligations 11-14):
+
+11. **Produced output must speak for the advertised key.** Length is not identity. Before any
+    signature reaches the caller, verify it under the public key you yourself advertise for that
+    instance, using a verifier *independent of* the provider that produced it — otherwise a
+    provider that forged the signature also blesses it. Failure is `Unavailable`.
+12. **Identifiers and aliases must be well-formed UTF-16.** `Encoding.UTF8` uses replacement
+    fallback, so every unpaired surrogate — and U+FFFD itself — encodes to the same three bytes.
+    Two distinct identifiers would then share a mutation fingerprint and one caller's mutation
+    would silently *replay* another's. Reject at the boundary, with a parameter name.
+13. **Import must prove the public key belongs to the private key.** `StoredKeyInfo.PublicKey` is
+    the verification identity downstream DID/VC code publishes. Derive the public key from the
+    material you just consumed and reject a mismatch before commit; matching `KeyType` and length
+    prove nothing. The transfer is spent either way — you have already seen the secret.
+14. **A callback must not re-enter what invoked it.** `Monitor` is reentrant, so a provider
+    callback would otherwise walk straight through your backend lock. Refuse same-thread
+    re-entry. The same applies to your `KeyMaterialReader<T>`: do not call back into the material
+    you are reading (NetCrypto refuses a nested `Consume` for you).
 
 ### Algorithm identifiers
 
