@@ -42,9 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reached 2, against a contract of "never exceeds one") and zeroized the pinned buffers
   the outer read was still borrowing — leaving the accepting store to commit an
   **all-zero key**. The nested call is now refused with `InvalidOperationException`, and
-  a re-entrant `Dispose()`/`Discard()` defers to the wipe the in-flight `Consume`
-  already performs, so it stays idempotent and non-throwing. Reading `KeyType` or
-  `PublicKey` from inside a reader is unaffected. This is PRD FR-7b rule 14 applied to
+  a `Dispose()`/`Discard()` that arrives during a read latches the instance disposed
+  immediately (`IsConsumed` reports `true`, every other member throws
+  `ObjectDisposedException`) while only the physical wipe defers to the in-flight
+  `Consume`'s completion — idempotent and non-throwing throughout. Reading `KeyType` or
+  `PublicKey` from inside a reader (before any dispose) is unaffected. This is PRD FR-7b rule 14 applied to
   the import reader; the path became reachable only by publishing `Consume` in this
   release, so no shipped version was exposed. (#28)
 

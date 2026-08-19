@@ -64,20 +64,62 @@ public class ExternalStoreImportTests
     }
 
     [Fact]
-    public async Task AReplayedImport_DestroysTheMaterialWithoutReadingIt()
+    public async Task AReplayedImport_SameOperationId_DestroysTheMaterialWithoutReadingIt()
     {
         var store = NewStore();
         using var source = Generator.Generate(KeyType.Ed25519);
+        var operationId = NewOperationId();
 
-        await store.ImportAsync(new KeyImportRequest(NewOperationId(), "byok", TransferableKeyMaterial.FromKeyPair(source)));
+        var original = await store.ImportAsync(
+            new KeyImportRequest(operationId, "byok", TransferableKeyMaterial.FromKeyPair(source)));
         store.ReaderEntries.Should().Be(1);
 
+        // The retry after a lost acknowledgement: SAME operation id, same request, a second
+        // transfer object holding the same secret. Identity is the operation id (FR-7b rule 5)
+        // — a fresh id with the same alias is a different request, not a replay.
         var retry = TransferableKeyMaterial.FromKeyPair(source);
-        var replay = await store.ImportAsync(new KeyImportRequest(NewOperationId(), "byok", retry));
+        var replay = await store.ImportAsync(new KeyImportRequest(operationId, "byok", retry));
 
         replay.Replayed.Should().BeTrue();
+        replay.InstanceId.Should().Be(original.InstanceId, "a replay returns the original receipt");
         store.ReaderEntries.Should().Be(1, "a recognized replay never re-reads private material");
         retry.IsConsumed.Should().BeTrue("but it is not left lying around with the caller either");
+    }
+
+    [Fact]
+    public async Task AReusedOperationId_WithADifferentRequest_IsAConflict_AndTheMaterialStaysUsable()
+    {
+        var store = NewStore();
+        using var first = Generator.Generate(KeyType.Ed25519);
+        var operationId = NewOperationId();
+        await store.ImportAsync(new KeyImportRequest(operationId, "byok", TransferableKeyMaterial.FromKeyPair(first)));
+
+        using var second = Generator.Generate(KeyType.Ed25519);
+        var material = TransferableKeyMaterial.FromKeyPair(second);
+
+        var act = () => store.ImportAsync(new KeyImportRequest(operationId, "other", material));
+        (await act.Should().ThrowAsync<KeyStoreException>())
+            .Which.Error.Should().Be(KeyStoreError.IdempotencyConflict);
+
+        store.ReaderEntries.Should().Be(1, "a conflicting request is refused before the read");
+        material.IsConsumed.Should().BeFalse("nothing was accepted, so nothing was spent");
+    }
+
+    [Fact]
+    public async Task ADuplicateAlias_UnderAFreshOperationId_IsRefusedBeforeTheRead()
+    {
+        var store = NewStore();
+        using var source = Generator.Generate(KeyType.Ed25519);
+        await store.ImportAsync(new KeyImportRequest(NewOperationId(), "byok", TransferableKeyMaterial.FromKeyPair(source)));
+
+        using var other = Generator.Generate(KeyType.Ed25519);
+        var material = TransferableKeyMaterial.FromKeyPair(other);
+
+        var act = () => store.ImportAsync(new KeyImportRequest(NewOperationId(), "byok", material));
+        await act.Should().ThrowAsync<InvalidOperationException>();
+
+        store.ReaderEntries.Should().Be(1);
+        material.IsConsumed.Should().BeFalse("a pre-acceptance failure leaves the material usable for one retry");
     }
 
     [Fact]

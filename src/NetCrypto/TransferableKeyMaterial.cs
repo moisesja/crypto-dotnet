@@ -231,21 +231,29 @@ public sealed class TransferableKeyMaterial : IDisposable
     /// <c>using var material = …</c> is the correct way to guarantee the secret is destroyed
     /// whether or not the import succeeded.
     /// </summary>
+    /// <remarks>
+    /// If a <see cref="Consume{T}"/> read is in flight on another thread, the latch is still
+    /// immediate — <see cref="IsConsumed"/> reports <c>true</c> and every other member throws
+    /// <see cref="ObjectDisposedException"/> from the moment this returns — but the physical
+    /// wipe completes with that read: zeroing mid-read would blank the buffers the reader is
+    /// borrowing and hand the accepting store an all-zero key.
+    /// </remarks>
     public void Dispose()
     {
         lock (_gate)
         {
             if (_consumed)
                 return;
+            _consumed = true;
             // A read is live (this lock is free because Consume runs the reader with _gate
             // released — whether the caller is that reader, re-entering, or another thread).
-            // Wiping now would blank the buffers the in-flight read is still borrowing and hand
-            // the accepting store an all-zero key. Defer instead: Consume's finally wipes and
-            // latches on the way out regardless, so by the time this call's effect can be
-            // observed, the state it promises already holds.
+            // The latch above still takes effect immediately: IsConsumed reports true and every
+            // other member throws ObjectDisposedException from this point on, exactly as the
+            // docs promise. Only the PHYSICAL wipe defers — zeroing now would blank the buffers
+            // the in-flight read is still borrowing and hand the accepting store an all-zero
+            // key. Consume's finally performs the wipe on the way out regardless.
             if (_reading)
                 return;
-            _consumed = true;
             CryptographicOperations.ZeroMemory(_privateKey);
             CryptographicOperations.ZeroMemory(_publicKey);
         }
@@ -282,7 +290,14 @@ public sealed class TransferableKeyMaterial : IDisposable
     /// served: it would be a second read of one-read material and would race the wipe against
     /// the buffers the live read is borrowing. Reading <see cref="KeyType"/> or
     /// <see cref="PublicKey"/> from inside a reader is fine, and a <see cref="Dispose"/> that
-    /// arrives during a read is honored by the wipe this call performs on the way out.
+    /// arrives during a read latches the instance immediately while its physical wipe is
+    /// performed by this call on the way out.
+    /// </para>
+    /// <para>
+    /// An exception thrown by the reader propagates to the caller <b>unmodified</b> — the
+    /// reader is the store's own code, so its failures are the store's to classify; this method
+    /// adds no wrapping and no translation. The consumption latch and the wipe happen
+    /// regardless.
     /// </para>
     /// </remarks>
     /// <typeparam name="T">The reader's result type — in practice the store's own key handle.</typeparam>
@@ -354,8 +369,8 @@ public sealed class TransferableKeyMaterial : IDisposable
     /// </summary>
     /// <remarks>
     /// An alias for <see cref="Dispose"/>, and idempotent and non-throwing on the same terms:
-    /// safe on already-consumed material, and deferred to the in-flight wipe if called from
-    /// inside a reader.
+    /// safe on already-consumed material, latching immediately even against an in-flight read
+    /// (whose completion performs the physical wipe).
     /// </remarks>
     public void Discard() => Dispose();
 

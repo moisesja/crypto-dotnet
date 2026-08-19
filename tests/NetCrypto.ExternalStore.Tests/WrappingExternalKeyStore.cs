@@ -30,6 +30,14 @@ public sealed class WrappingExternalKeyStore : ICapableKeyStore
     private readonly byte[] _wrappingKey;
     private readonly Dictionary<string, (byte[] Wrapped, StoredKeyInfo Info)> _custody = [];
 
+    // FR-7b rule 5: mutation identity is (NamespaceId, KeyMutationKind, KeyOperationId) — this
+    // store has one namespace and implements one mutation kind, so the ledger keys on the
+    // operation id alone. The fingerprint is a value tuple (no delimiter-joined string, so no
+    // field-boundary collisions) over what a replay is allowed to look at: alias, key type, and
+    // the PUBLIC half. The private half is never part of it — a recognized replay must be
+    // decided without reading the secret (rule 7).
+    private readonly Dictionary<KeyOperationId, ((string Alias, KeyType KeyType, string PublicKeyHex) Fingerprint, KeyMutationResult Result)> _ledger = [];
+
     public WrappingExternalKeyStore(byte[] wrappingKey) => _wrappingKey = wrappingKey;
 
     /// <summary>How many times a reader delegate of this store has been entered. Never above 1
@@ -50,14 +58,32 @@ public sealed class WrappingExternalKeyStore : ICapableKeyStore
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        // A replay must destroy the material WITHOUT reading it (FR-7b rule 7).
-        if (_custody.ContainsKey(request.Alias))
+        // The idempotency decision comes first, from public material only. Reading KeyType /
+        // PublicKey on consumed material throws the documented ObjectDisposedException.
+        var fingerprint = (request.Alias, request.Material.KeyType,
+            Convert.ToHexString(request.Material.PublicKey));
+
+        if (_ledger.TryGetValue(request.OperationId, out var prior))
         {
+            // Same operation id, different request: a conflict, never a silent overwrite or a
+            // false success. The material was not accepted, so it stays usable for a retry
+            // under a fresh id (FR-7b rule 5).
+            if (prior.Fingerprint != fingerprint)
+                throw new KeyStoreException(KeyStoreError.IdempotencyConflict,
+                    "The operation id was already used for a different import request.");
+
+            // Same operation id, same request: a genuine replay (the retry after a lost
+            // acknowledgement). Destroy the material WITHOUT reading it (FR-7b rule 7) and
+            // hand back the original receipt.
             request.Material.Discard();
-            var replayed = _custody[request.Alias];
-            return Task.FromResult(new KeyMutationResult(
-                replayed.Info, replayed.Info.InstanceId!.Value, Replayed: true));
+            return Task.FromResult(prior.Result with { Replayed = true });
         }
+
+        // A fresh operation id colliding on the alias is a definite pre-acceptance failure:
+        // refused BEFORE the read, so the material stays usable — the same duplicate-alias
+        // signal the reference store documents.
+        if (_custody.ContainsKey(request.Alias))
+            throw new InvalidOperationException($"Key alias '{request.Alias}' already exists.");
 
         var instanceId = new KeyInstanceId($"inst-{request.Alias}");
 
@@ -92,9 +118,14 @@ public sealed class WrappingExternalKeyStore : ICapableKeyStore
             PublicKey = accepted.PublicKey,
             InstanceId = instanceId,
         };
-        _custody[request.Alias] = (accepted.Wrapped, info);
+        var result = new KeyMutationResult(info, instanceId, Replayed: false);
 
-        return Task.FromResult(new KeyMutationResult(info, instanceId, Replayed: false));
+        // Commit custody, receipt, and fingerprint together — acceptance and the ledger entry
+        // that makes its retry recognizable must not be separable.
+        _custody[request.Alias] = (accepted.Wrapped, info);
+        _ledger[request.OperationId] = (fingerprint, result);
+
+        return Task.FromResult(result);
     }
 
     /// <summary>Unwraps what custody holds — the test's proof that the true secret crossed.</summary>

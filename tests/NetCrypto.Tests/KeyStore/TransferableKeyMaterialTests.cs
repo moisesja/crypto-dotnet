@@ -20,19 +20,39 @@ public class TransferableKeyMaterialTests
 
     // --- the type itself ---
 
+    /// <summary>
+    /// Since #28 the type deliberately has ONE caller-reachable read path — the delegate-
+    /// mediated <see cref="TransferableKeyMaterial.Consume{T}"/> — so the invariant to pin is
+    /// not "no read path" but its two halves: no getter/format/export member for private
+    /// material, and no second read-shaped member beyond the sanctioned pair.
+    /// </summary>
     [Fact]
-    public void ExposesNoReadPathForPrivateMaterial()
+    public void TheOnlyReadPathIsConsume_AndThereIsNoGetterFormatOrExportSurface()
     {
-        var forbidden = typeof(TransferableKeyMaterial)
-            .GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
+        var members = typeof(TransferableKeyMaterial)
+            .GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly);
+
+        members
             .Select(m => m.Name)
             .Where(name => name.Contains("Private", StringComparison.OrdinalIgnoreCase)
                 || name.Contains("Export", StringComparison.OrdinalIgnoreCase)
                 || name.Contains("Jwk", StringComparison.OrdinalIgnoreCase)
                 || name.Contains("Secret", StringComparison.OrdinalIgnoreCase))
-            .ToList();
+            .Should().BeEmpty("private material has no getter, no formatting, and no export member");
 
-        forbidden.Should().BeEmpty("the whole point is that no caller-reachable read path exists");
+        // Every public member is on the closed expected list, so a new read-shaped member
+        // cannot slip in unreviewed; Consume is present and is the one sanctioned read.
+        members
+            .Where(m => m is not System.Reflection.ConstructorInfo)
+            .Select(m => m.Name)
+            .Where(name => !name.StartsWith("get_", StringComparison.Ordinal))
+            .Distinct()
+            .Should().BeEquivalentTo(
+                [nameof(TransferableKeyMaterial.FromKeyPair), nameof(TransferableKeyMaterial.FromRawKey),
+                 nameof(TransferableKeyMaterial.KeyType), nameof(TransferableKeyMaterial.PublicKey),
+                 nameof(TransferableKeyMaterial.IsConsumed), nameof(TransferableKeyMaterial.Dispose),
+                 nameof(TransferableKeyMaterial.Consume), nameof(TransferableKeyMaterial.Discard)],
+                "the surface is exactly the caller half plus the store-side Consume/Discard acceptance pair (#28)");
     }
 
     [Fact]
