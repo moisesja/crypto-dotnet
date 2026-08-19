@@ -771,13 +771,22 @@ Any JSON handling uses `System.Text.Json` (or `Microsoft.IdentityModel.Tokens` 8
 ### NFR-3 — Input validation
 Every public method validates lengths/nulls and throws `ArgumentException`/`ArgumentNullException` with the parameter name before any crypto operation. A wrong-length raw key/scalar handed to a backend (NSec, Nethermind BLS, platform EC import) must surface as a **parameter-named `ArgumentException`**, never a leaked backend type; the fuzz-lite suite carries **no** "known deviation" allow-list, and any non-contract exception fails it rather than being pinned.
 
+**Caller-callback exception boundary.** A higher-order public method does not translate an
+exception that escapes execution of a caller-supplied delegate unless that method explicitly
+says otherwise. This includes exceptions raised by code or dependencies the delegate itself
+invokes: the API cannot and must not guess which internal call inside caller code was intended.
+The same exception instance propagates. This is a narrow execution-boundary carveout, not a type
+allow-list: exceptions raised by NetCrypto or its dependencies outside the delegate call still
+follow the rules below, and security postconditions such as single-use latching and zeroization
+must hold even when the callback throws.
+
 **Negative coverage spans three input families**, not one. Every public method that parses caller bytes carries at least one test from each applicable family:
 
 - **(a) Absent** — null, empty.
 - **(b) Wrong-shape** — wrong length, oversized, non-multiple-of-block.
 - **(c) Structurally-valid-but-semantically-wrong** — a structurally valid base64 string that is not valid base64url; an off-curve point that still parses; a coordinate that is on-curve by value but left-zero-trimmed in length; a high-S signature; an index past the message count; an oversized length *parameter*. **This is where the defects hide**, because (a) and (b) usually fail fast in obvious ways. All-zero buffers are a specific blind spot: for P-256, `x = 0` decompresses to a *valid* point, so a zero-filled "bad key" silently takes the happy path.
 
-**Forbidden leaked exception types** from any public method on any input: `IndexOutOfRangeException`, `NullReferenceException`, `System.FormatException`, `OverflowException`, `KeyNotFoundException` (where not the documented contract), and any backend or platform type (`Nethermind.Crypto.Bls+BlsException`, a platform `CryptographicException` from EC import). All must become `ArgumentException`/`ArgumentNullException` with the parameter name — or a documented `false` for verify-style methods. `CryptographicException` is reserved for genuine crypto failures and must **not** double as the catch-all for malformed input.
+**Forbidden leaked exception types** originating in NetCrypto or one of its dependencies outside a caller-supplied delegate call, from any public method on any input: `IndexOutOfRangeException`, `NullReferenceException`, `System.FormatException`, `OverflowException`, `KeyNotFoundException` (where not the documented contract), and any backend or platform type (`Nethermind.Crypto.Bls+BlsException`, a platform `CryptographicException` from EC import). All must become `ArgumentException`/`ArgumentNullException` with the parameter name — or a documented `false` for verify-style methods. `CryptographicException` is reserved for genuine crypto failures and must **not** double as the catch-all for malformed input. The caller-callback boundary above is the only general exception: anything escaping delegate execution is propagated, not "leaked" by NetCrypto.
 
 **Acceptance criteria:**
 - [ ] Per-primitive negative tests exist (each FR above includes them).

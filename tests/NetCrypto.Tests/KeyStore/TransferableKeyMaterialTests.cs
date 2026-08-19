@@ -40,19 +40,45 @@ public class TransferableKeyMaterialTests
                 || name.Contains("Secret", StringComparison.OrdinalIgnoreCase))
             .Should().BeEmpty("private material has no getter, no formatting, and no export member");
 
-        // Every public member is on the closed expected list, so a new read-shaped member
-        // cannot slip in unreviewed; Consume is present and is the one sanctioned read.
-        members
-            .Where(m => m is not System.Reflection.ConstructorInfo)
-            .Select(m => m.Name)
-            .Where(name => !name.StartsWith("get_", StringComparison.Ordinal))
-            .Distinct()
-            .Should().BeEquivalentTo(
-                [nameof(TransferableKeyMaterial.FromKeyPair), nameof(TransferableKeyMaterial.FromRawKey),
-                 nameof(TransferableKeyMaterial.KeyType), nameof(TransferableKeyMaterial.PublicKey),
-                 nameof(TransferableKeyMaterial.IsConsumed), nameof(TransferableKeyMaterial.Dispose),
-                 nameof(TransferableKeyMaterial.Consume), nameof(TransferableKeyMaterial.Discard)],
-                "the surface is exactly the caller half plus the store-side Consume/Discard acceptance pair (#28)");
+        // Preserve multiplicity: projecting to distinct names would let a second Consume
+        // overload — and therefore a second read path — hide behind the sanctioned name.
+        var methods = members.OfType<MethodInfo>().Where(method => !method.IsSpecialName).ToArray();
+        methods.Select(method => method.Name).Should().BeEquivalentTo(
+            [nameof(TransferableKeyMaterial.FromKeyPair), nameof(TransferableKeyMaterial.FromRawKey),
+             nameof(TransferableKeyMaterial.Dispose), nameof(TransferableKeyMaterial.Consume),
+             nameof(TransferableKeyMaterial.Discard)],
+            "every declared public method, including every overload, is part of the reviewed surface");
+        members.OfType<PropertyInfo>().Select(property => property.Name).Should().BeEquivalentTo(
+            [nameof(TransferableKeyMaterial.KeyType), nameof(TransferableKeyMaterial.PublicKey),
+             nameof(TransferableKeyMaterial.IsConsumed)]);
+
+        var consumeMethods = methods
+            .Where(method => method.Name == nameof(TransferableKeyMaterial.Consume))
+            .ToArray();
+        consumeMethods.Should().ContainSingle("there is exactly one sanctioned private-material read path");
+
+        var consume = consumeMethods.Single();
+        consume.IsStatic.Should().BeFalse();
+        consume.IsGenericMethodDefinition.Should().BeTrue();
+        var resultType = consume.GetGenericArguments().Should().ContainSingle().Subject;
+        consume.ReturnType.Should().Be(resultType);
+        var readParameter = consume.GetParameters().Should().ContainSingle().Subject;
+        readParameter.Name.Should().Be("read");
+        readParameter.ParameterType.IsGenericType.Should().BeTrue();
+        readParameter.ParameterType.GetGenericTypeDefinition().Should().Be(typeof(KeyMaterialReader<>));
+        readParameter.ParameterType.GetGenericArguments().Should().Equal(resultType);
+
+        var readerType = typeof(KeyMaterialReader<>);
+        var readerResultType = readerType.GetGenericArguments().Should().ContainSingle().Subject;
+        var invoke = readerType.GetMethod(nameof(KeyMaterialReader<object>.Invoke),
+            BindingFlags.Public | BindingFlags.Instance);
+        invoke.Should().NotBeNull("the sole read delegate must retain its reviewed signature");
+        invoke!.ReturnType.Should().Be(readerResultType);
+        var readerParameters = invoke.GetParameters();
+        readerParameters.Select(parameter => parameter.Name).Should().Equal(
+            "keyType", "publicKey", "privateKey");
+        readerParameters.Select(parameter => parameter.ParameterType).Should().Equal(
+            typeof(KeyType), typeof(ReadOnlySpan<byte>), typeof(ReadOnlySpan<byte>));
     }
 
     [Fact]

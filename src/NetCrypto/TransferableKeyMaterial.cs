@@ -49,8 +49,10 @@ public delegate T KeyMaterialReader<out T>(
 /// The secret lives in a pinned buffer (the FR-18 zeroization infrastructure, so a compacting
 /// GC cannot duplicate it before the wipe), is read exactly once through
 /// <see cref="Consume{T}"/> at the instant the store accepts it, and is then zeroized while the
-/// instance latches permanently unreadable. Every member except <see cref="IsConsumed"/> throws
-/// <see cref="ObjectDisposedException"/> afterwards.
+/// instance latches permanently unreadable. The data-access members <see cref="KeyType"/>,
+/// <see cref="PublicKey"/>, and <see cref="Consume{T}"/> throw
+/// <see cref="ObjectDisposedException"/> afterwards; <see cref="IsConsumed"/> remains readable,
+/// and <see cref="Dispose"/> / <see cref="Discard"/> remain idempotent and non-throwing.
 /// </para>
 /// <para>
 /// <b>A live instance is a bearer secret.</b> <see cref="Consume{T}"/> is public so that a store
@@ -233,10 +235,12 @@ public sealed class TransferableKeyMaterial : IDisposable
     /// </summary>
     /// <remarks>
     /// If a <see cref="Consume{T}"/> read is in flight on another thread, the latch is still
-    /// immediate — <see cref="IsConsumed"/> reports <c>true</c> and every other member throws
-    /// <see cref="ObjectDisposedException"/> from the moment this returns — but the physical
-    /// wipe completes with that read: zeroing mid-read would blank the buffers the reader is
-    /// borrowing and hand the accepting store an all-zero key.
+    /// immediate — <see cref="IsConsumed"/> reports <c>true</c> and the data-access members
+    /// <see cref="KeyType"/>, <see cref="PublicKey"/>, and <see cref="Consume{T}"/> throw
+    /// <see cref="ObjectDisposedException"/> from the moment this returns — but the physical wipe
+    /// completes with that read: zeroing mid-read would blank the buffers the reader is borrowing
+    /// and hand the accepting store an all-zero key. <see cref="Dispose"/> and
+    /// <see cref="Discard"/> remain idempotent and non-throwing.
     /// </remarks>
     public void Dispose()
     {
@@ -247,11 +251,12 @@ public sealed class TransferableKeyMaterial : IDisposable
             _consumed = true;
             // A read is live (this lock is free because Consume runs the reader with _gate
             // released — whether the caller is that reader, re-entering, or another thread).
-            // The latch above still takes effect immediately: IsConsumed reports true and every
-            // other member throws ObjectDisposedException from this point on, exactly as the
-            // docs promise. Only the PHYSICAL wipe defers — zeroing now would blank the buffers
-            // the in-flight read is still borrowing and hand the accepting store an all-zero
-            // key. Consume's finally performs the wipe on the way out regardless.
+            // The latch above still takes effect immediately: IsConsumed reports true and the
+            // data-access members throw ObjectDisposedException from this point on, exactly as
+            // the docs promise. Dispose and Discard remain idempotent. Only the PHYSICAL wipe
+            // defers — zeroing now would blank the buffers the in-flight read is still borrowing
+            // and hand the accepting store an all-zero key. Consume's finally performs the wipe
+            // on the way out regardless.
             if (_reading)
                 return;
             CryptographicOperations.ZeroMemory(_privateKey);

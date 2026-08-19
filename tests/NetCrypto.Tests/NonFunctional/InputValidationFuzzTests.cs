@@ -320,50 +320,68 @@ public class InputValidationFuzzTests
     [Theory]
     [MemberData(nameof(HostileReaders))]
     public void TransferableKeyMaterial_HostileReader_AlwaysSpendsAndWipes_WithTheDocumentedExceptionSplit(
-        string description, Func<TransferableKeyMaterial, Exception?> planted, Action<TransferableKeyMaterial> reader)
+        string description,
+        Func<TransferableKeyMaterial, Exception?> planted,
+        Type? expectedNetCryptoException,
+        Action<TransferableKeyMaterial> reader)
     {
         using var pair = new DefaultKeyGenerator().Generate(KeyType.Ed25519);
         var material = TransferableKeyMaterial.FromKeyPair(pair);
         var backing = (byte[])typeof(TransferableKeyMaterial)
             .GetField("_privateKey", BindingFlags.NonPublic | BindingFlags.Instance)!
             .GetValue(material)!;
-        var expected = planted(material);
-
         var thrown = Record.Exception(() => reader(material));
+        var expected = planted(material);
 
         if (expected is not null)
             thrown.Should().BeSameAs(expected,
                 $"a {description}'s own exception propagates unmodified — no wrapping, no translation");
-        else if (thrown is not null)
-            thrown.Should().Match(e => e is InvalidOperationException || e is ObjectDisposedException,
-                $"NetCrypto's own refusal for a {description} is a documented type");
+        else if (expectedNetCryptoException is not null)
+            thrown.Should().BeOfType(expectedNetCryptoException,
+                $"NetCrypto's own refusal for a {description} is the specifically documented type");
+        else
+            thrown.Should().BeNull($"a {description} is documented as non-throwing");
 
         material.IsConsumed.Should().BeTrue($"a {description} still spends the material");
         backing.Should().OnlyContain(b => b == 0, $"a {description} must not leave the secret live");
     }
 
-    public static TheoryData<string, Func<TransferableKeyMaterial, Exception?>, Action<TransferableKeyMaterial>> HostileReaders()
+    public static TheoryData<string, Func<TransferableKeyMaterial, Exception?>, Type?, Action<TransferableKeyMaterial>> HostileReaders()
     {
         // Cases that plant an exception assert same-instance propagation; the rest assert any
-        // refusal NetCrypto itself raises is a documented type. The planted FormatException is
-        // the reviewer's exact probe: a non-contract type from the READER must come back as-is.
+        // refusal NetCrypto itself raises is a documented type. Both FormatException rows pin
+        // the delegate execution boundary: one throws directly and one comes from code invoked
+        // by the delegate. Neither is NetCrypto's exception to translate.
         var readerFault = new InvalidOperationException("boom");
         var foreignFault = new FormatException("the store's own parser failed");
+        FormatException? parserFault = null;
         return new()
         {
-            { "reader that throws", _ => readerFault,
+            { "reader that throws", _ => readerFault, null,
                 m => m.Consume<int>((_, _, _) => throw readerFault) },
-            { "reader that throws a non-contract type", _ => foreignFault,
+            { "reader that throws a non-contract type", _ => foreignFault, null,
                 m => m.Consume<int>((_, _, _) => throw foreignFault) },
-            { "reader that re-enters Consume", _ => null,
+            { "reader whose dependency throws a non-contract type", _ => parserFault, null,
+                m => m.Consume<int>((_, _, _) =>
+                {
+                    try { _ = Convert.FromBase64String("!"); }
+                    catch (FormatException exception)
+                    {
+                        parserFault = exception;
+                        throw;
+                    }
+
+                    return 0;
+                }) },
+            { "reader that re-enters Consume", _ => null, typeof(InvalidOperationException),
                 m => m.Consume((_, _, _) => m.Consume((_, _, _) => 0)) },
-            { "reader that disposes the material", _ => null,
+            { "reader that disposes the material", _ => null, null,
                 m => m.Consume((_, _, _) => { m.Dispose(); return 0; }) },
-            { "reader that discards the material", _ => null,
+            { "reader that discards the material", _ => null, null,
                 m => m.Consume((_, _, _) => { m.Discard(); return 0; }) },
-            { "reader that returns the private span as an array", _ => null,
+            { "reader that returns the private span as an array", _ => null, null,
                 m => m.Consume((_, _, priv) => priv.ToArray().Length) },
-            { "reader that re-enters and then throws", _ => readerFault,
+            { "reader that re-enters and then throws", _ => readerFault, null,
                 m => m.Consume<int>((_, _, _) =>
                 {
                     try { m.Consume((_, _, _) => 0); } catch (InvalidOperationException) { }

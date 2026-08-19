@@ -27,8 +27,11 @@ public sealed class WrappingExternalKeyStore : ICapableKeyStore
 {
     private static readonly DefaultKeyGenerator Generator = new();
 
+    private readonly object _gate = new();
     private readonly byte[] _wrappingKey;
+    private readonly Action<bool>? _afterReplayMiss;
     private readonly Dictionary<string, (byte[] Wrapped, StoredKeyInfo Info)> _custody = [];
+    private int _readerEntries;
 
     // FR-7b rule 5: mutation identity is (NamespaceId, KeyMutationKind, KeyOperationId) — this
     // store has one namespace and implements one mutation kind, so the ledger keys on the
@@ -38,11 +41,26 @@ public sealed class WrappingExternalKeyStore : ICapableKeyStore
     // decided without reading the secret (rule 7).
     private readonly Dictionary<KeyOperationId, ((string Alias, KeyType KeyType, string PublicKeyHex) Fingerprint, KeyMutationResult Result)> _ledger = [];
 
-    public WrappingExternalKeyStore(byte[] wrappingKey) => _wrappingKey = wrappingKey;
+    public WrappingExternalKeyStore(byte[] wrappingKey, Action<bool>? afterReplayMiss = null)
+    {
+        ArgumentNullException.ThrowIfNull(wrappingKey);
+        if (wrappingKey.Length == 0)
+            throw new ArgumentException("The wrapping key must not be empty.", nameof(wrappingKey));
+
+        _wrappingKey = (byte[])wrappingKey.Clone();
+        _afterReplayMiss = afterReplayMiss;
+    }
 
     /// <summary>How many times a reader delegate of this store has been entered. Never above 1
     /// per import — the external-assembly counterpart of the library's internal read counter.</summary>
-    public int ReaderEntries { get; private set; }
+    public int ReaderEntries
+    {
+        get
+        {
+            lock (_gate)
+                return _readerEntries;
+        }
+    }
 
     public KeyStoreNamespaceId NamespaceId { get; } = new("external-test");
 
@@ -58,6 +76,15 @@ public sealed class WrappingExternalKeyStore : ICapableKeyStore
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        // The in-memory gate stands in for a real backend's atomic transaction. It serializes
+        // the replay lookup, alias check, acceptance read, custody write, and receipt write, so
+        // concurrent exact retries cannot both consume material or observe a partial commit.
+        lock (_gate)
+            return Task.FromResult(ImportLocked(request));
+    }
+
+    private KeyMutationResult ImportLocked(KeyImportRequest request)
+    {
         // The idempotency decision comes first, from public material only. Reading KeyType /
         // PublicKey on consumed material throws the documented ObjectDisposedException.
         var fingerprint = (request.Alias, request.Material.KeyType,
@@ -76,8 +103,14 @@ public sealed class WrappingExternalKeyStore : ICapableKeyStore
             // acknowledgement). Destroy the material WITHOUT reading it (FR-7b rule 7) and
             // hand back the original receipt.
             request.Material.Discard();
-            return Task.FromResult(prior.Result with { Replayed = true });
+            return prior.Result with { Replayed = true };
         }
+
+        // Test-only scheduling probe. The bool proves the entire miss-to-commit path is under
+        // the transaction gate; on a reverse-patched unsynchronized implementation the test
+        // uses this point to hold every caller after the miss, making the regression failure
+        // deterministic rather than scheduler-dependent.
+        _afterReplayMiss?.Invoke(Monitor.IsEntered(_gate));
 
         // A fresh operation id colliding on the alias is a definite pre-acceptance failure:
         // refused BEFORE the read, so the material stays usable — the same duplicate-alias
@@ -92,7 +125,7 @@ public sealed class WrappingExternalKeyStore : ICapableKeyStore
         KeyMaterialReader<(byte[] Wrapped, byte[] PublicKey, KeyType KeyType)> reader =
             (keyType, publicKey, privateKey) =>
             {
-                ReaderEntries++;
+                _readerEntries++;
 
                 // FR-7b obligation 13: the public key a store publishes is the verification
                 // identity downstream code trusts, so it is derived from the secret rather than
@@ -120,16 +153,20 @@ public sealed class WrappingExternalKeyStore : ICapableKeyStore
         };
         var result = new KeyMutationResult(info, instanceId, Replayed: false);
 
-        // Commit custody, receipt, and fingerprint together — acceptance and the ledger entry
-        // that makes its retry recognizable must not be separable.
+        // Both writes happen under _gate, so no concurrent caller can observe custody without
+        // the receipt that makes an exact retry recognizable (or vice versa).
         _custody[request.Alias] = (accepted.Wrapped, info);
         _ledger[request.OperationId] = (fingerprint, result);
 
-        return Task.FromResult(result);
+        return result;
     }
 
     /// <summary>Unwraps what custody holds — the test's proof that the true secret crossed.</summary>
-    public byte[] Unwrap(string alias) => Wrap(_custody[alias].Wrapped);
+    public byte[] Unwrap(string alias)
+    {
+        lock (_gate)
+            return Wrap(_custody[alias].Wrapped);
+    }
 
     private byte[] Wrap(ReadOnlySpan<byte> material)
     {
@@ -158,6 +195,10 @@ public sealed class WrappingExternalKeyStore : ICapableKeyStore
     public Task<byte[]> SignAsync(string alias, ReadOnlyMemory<byte> data, CancellationToken ct = default) => NotThisStore<byte[]>();
     public Task<ISigner> CreateSignerAsync(string alias, CancellationToken ct = default) => NotThisStore<ISigner>();
     public Task<byte[]> DeriveSharedSecretAsync(string alias, ReadOnlyMemory<byte> peerPublicKey, CancellationToken ct = default) => NotThisStore<byte[]>();
-    public Task<IReadOnlyList<string>> ListAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<string>>([.. _custody.Keys]);
+    public Task<IReadOnlyList<string>> ListAsync(CancellationToken ct = default)
+    {
+        lock (_gate)
+            return Task.FromResult<IReadOnlyList<string>>([.. _custody.Keys]);
+    }
     public Task<bool> DeleteAsync(string alias, CancellationToken ct = default) => NotThisStore<bool>();
 }

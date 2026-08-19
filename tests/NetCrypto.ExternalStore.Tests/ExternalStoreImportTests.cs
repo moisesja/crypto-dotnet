@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using FluentAssertions;
 using NetCrypto;
 
@@ -12,8 +14,8 @@ public class ExternalStoreImportTests
 {
     private static readonly DefaultKeyGenerator Generator = new();
 
-    private static WrappingExternalKeyStore NewStore() =>
-        new([0x5A, 0xC3, 0x11, 0xF0, 0x9E, 0x24, 0x7B, 0x86]);
+    private static WrappingExternalKeyStore NewStore(Action<bool>? afterReplayMiss = null) =>
+        new([0x5A, 0xC3, 0x11, 0xF0, 0x9E, 0x24, 0x7B, 0x86], afterReplayMiss);
 
     private static KeyOperationId NewOperationId() => new(Guid.NewGuid().ToString("N"));
 
@@ -33,6 +35,32 @@ public class ExternalStoreImportTests
         store.Unwrap("byok").Should().Equal(
             expectedPrivateKey,
             "the store must receive the real secret — a mid-read zeroization would hand it zeros");
+    }
+
+    [Fact]
+    public async Task TheStore_DefensivelyCopiesItsWrappingKey()
+    {
+        byte[] wrappingKey = [0x5A, 0xC3, 0x11, 0xF0, 0x9E, 0x24, 0x7B, 0x86];
+        var store = new WrappingExternalKeyStore(wrappingKey);
+        using var source = Generator.Generate(KeyType.Ed25519);
+        var expectedPrivateKey = source.PrivateKey;
+
+        await store.ImportAsync(new KeyImportRequest(
+            NewOperationId(), "byok", TransferableKeyMaterial.FromKeyPair(source)));
+        wrappingKey[0] ^= 0xFF;
+
+        store.Unwrap("byok").Should().Equal(expectedPrivateKey,
+            "the caller cannot mutate the store's wrapping key after construction");
+    }
+
+    [Fact]
+    public void TheStore_RejectsAMissingWrappingKey()
+    {
+        var nullKey = () => new WrappingExternalKeyStore(null!);
+        var emptyKey = () => new WrappingExternalKeyStore([]);
+
+        nullKey.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("wrappingKey");
+        emptyKey.Should().Throw<ArgumentException>().Which.ParamName.Should().Be("wrappingKey");
     }
 
     [Fact]
@@ -84,6 +112,85 @@ public class ExternalStoreImportTests
         replay.InstanceId.Should().Be(original.InstanceId, "a replay returns the original receipt");
         store.ReaderEntries.Should().Be(1, "a recognized replay never re-reads private material");
         retry.IsConsumed.Should().BeTrue("but it is not left lying around with the caller either");
+    }
+
+    [Fact]
+    public void ConcurrentExactReplays_CommitOnce_ReadOnce_AndReturnOneStableReceipt()
+    {
+        const int attempts = 16;
+        var bound = TimeSpan.FromSeconds(15);
+        using var unsynchronizedMisses = new CountdownEvent(attempts);
+        var store = NewStore(transactionGateHeld =>
+        {
+            if (transactionGateHeld)
+                return;
+
+            // This branch is unreachable with the fix. If the gate is reverse-patched out,
+            // force every caller past the empty-ledger lookup before any can accept or commit,
+            // so the test fails deterministically rather than depending on thread scheduling.
+            unsynchronizedMisses.Signal();
+            if (!unsynchronizedMisses.Wait(bound))
+                throw new TimeoutException("Not every unsynchronized caller reached the replay miss.");
+        });
+        using var source = Generator.Generate(KeyType.Ed25519);
+        var operationId = NewOperationId();
+        var materials = Enumerable.Range(0, attempts)
+            .Select(_ => TransferableKeyMaterial.FromKeyPair(source))
+            .ToArray();
+        using var ready = new CountdownEvent(attempts);
+        using var start = new ManualResetEventSlim();
+        var results = new ConcurrentQueue<KeyMutationResult>();
+        var failures = new ConcurrentQueue<Exception>();
+
+        var workers = materials.Select(material => new Thread(() =>
+        {
+            ready.Signal();
+            if (!start.Wait(bound))
+            {
+                failures.Enqueue(new TimeoutException("The concurrent replay start signal timed out."));
+                return;
+            }
+
+            try
+            {
+                results.Enqueue(store.ImportAsync(
+                    new KeyImportRequest(operationId, "byok", material)).GetAwaiter().GetResult());
+            }
+            catch (Exception ex)
+            {
+                failures.Enqueue(ex);
+            }
+        }) { IsBackground = true }).ToList();
+
+        try
+        {
+            foreach (var worker in workers)
+                worker.Start();
+            ready.Wait(bound).Should().BeTrue("all exact retries must be poised before release");
+            start.Set();
+            var joinBudget = Stopwatch.StartNew();
+            foreach (var worker in workers)
+            {
+                var remaining = bound - joinBudget.Elapsed;
+                worker.Join(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero)
+                    .Should().BeTrue("all idempotent retries share one bounded deadlock budget");
+            }
+
+            failures.Should().BeEmpty("exact concurrent retries are the race idempotency must absorb");
+            results.Should().HaveCount(attempts);
+            results.Count(result => !result.Replayed).Should().Be(1, "the mutation commits once");
+            results.Count(result => result.Replayed).Should().Be(attempts - 1);
+            results.Select(result => result.InstanceId).Distinct().Should().ContainSingle(
+                "every retry returns the original stable receipt");
+            store.ReaderEntries.Should().Be(1, "only the committing call may read private material");
+            materials.Should().OnlyContain(material => material.IsConsumed,
+                "the original is consumed and every recognized retry is discarded unread");
+        }
+        finally
+        {
+            foreach (var material in materials)
+                material.Dispose();
+        }
     }
 
     [Fact]

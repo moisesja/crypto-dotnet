@@ -31,7 +31,7 @@ checks but breaks the next layer?"* — then write that test.
 
 ## Forbidden leaked exception types
 
-From any public method, on any input:
+Originating in NetCrypto or one of its dependencies, from any public method and on any input:
 
 `IndexOutOfRangeException` · `NullReferenceException` · `System.FormatException` ·
 `OverflowException` · `KeyNotFoundException` (where not the documented contract) · any backend
@@ -41,6 +41,17 @@ or platform type (`Nethermind.Crypto.Bls+BlsException`, NSec's `FormatException`
 All must become `ArgumentException` / `ArgumentNullException` with the parameter name — or a
 documented `false` return for verify-style methods. `CryptographicException` is reserved for
 genuine crypto failures and must **not** double as the catch-all for malformed input.
+
+### Caller-callback exception boundary
+
+A higher-order method does not translate an exception that escapes execution of a
+caller-supplied delegate unless its contract explicitly says otherwise. This includes an
+exception raised by code or dependencies the delegate invokes: the API cannot infer provenance
+inside caller code. The same exception instance propagates. This is an execution-boundary rule,
+never a type allow-list: the same `FormatException` is permitted when it escapes the delegate
+and forbidden when NetCrypto or a dependency raises it outside that call. Always assert the
+method's security postconditions (for example, consumption and zeroization) even when the
+callback throws.
 
 ## Procedure
 
