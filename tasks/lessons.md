@@ -313,3 +313,20 @@ patch; adding backward-compatible functionality is minor; breaking documented va
 major.
 
 → Rule: `netcrypto-prd.md` §8, **Per-release hygiene** (SemVer classification).
+
+## L17 — A probabilistic assertion on random-key output is a flake you must fix, not report
+
+Reviewing PR #31, the Windows leg failed `Secp256k1_IsAlwaysFixedWidthCompact`: the test
+asserted `signature[0] != 0x30` on a compact r‖s signature made with a freshly generated key.
+r's first byte is uniform, so the assertion rejects a *valid* signature ~1 run in 256 — measured
+at 18/5,000 in an executable probe, every one verifying. Two lessons:
+
+1. **Never assert a property of cryptographically random bytes unless it holds with certainty.**
+   "Not DER" was already proven by the deterministic facts: fixed 64-byte width and a compact
+   verification round-trip. The first-byte check added nothing but a built-in failure rate. Its
+   positive sibling (`DER starts with 0x30`) is fine — that one is a certainty of the encoding.
+2. **When a review diagnoses a concrete defect, deliver the fix, not a recommendation.** I had
+   root-caused the flake, named the line, and proposed the exact change — then told the author to
+   file a follow-up. The user had to say "you fix it". A confirmed root cause plus a known
+   minimal fix means the fix is the deliverable (workflow policy: AGENTS.md §Autonomous Bug
+   Fixing).

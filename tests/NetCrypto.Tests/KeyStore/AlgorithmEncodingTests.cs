@@ -80,8 +80,11 @@ public class AlgorithmEncodingTests
 
         var signature = await store.SignAsync(new KeySignRequest(alias, instanceId, KeyStoreAlgorithms.Es256K, data));
 
-        signature.Should().HaveCount(64);
-        signature[0].Should().NotBe(0x30, "secp256k1 has no DER form here, so it cannot be an ASN.1 SEQUENCE");
+        // No assertion on signature[0]: r's leading byte is uniform over freshly generated keys,
+        // so a valid compact signature legitimately starts with 0x30 about 1 run in 256. The
+        // fixed 64-byte width plus the compact Verify round-trip below already prove this is
+        // r‖s, not a variable-length DER SEQUENCE.
+        signature.Should().HaveCount(64, "compact secp256k1 is fixed-width r‖s at the curve's field size");
         CapableStoreTestSupport.CryptoProvider
             .Verify(KeyType.Secp256k1, info!.PublicKey, data, signature)
             .Should().BeTrue();
