@@ -296,3 +296,20 @@ Each is a distinct pattern worth keeping:
 
 → Adversarial passes probe what code *does*; reviews also probe what code *claims*. Both were
 needed here. FR-7b rules 5/7/14; [`adversarial-pass`](../.claude/skills/adversarial-pass/SKILL.md).
+
+## L16 — Earlier rejection of already-invalid input is a patch, not a minor feature
+
+For issue #30 I followed the issue's compatibility note and prepared 1.8.0 because malformed
+`KeyPair` input would start failing earlier. That was the wrong SemVer axis. The public contract
+already required wrong-length material to be rejected before the custody boundary, the change
+added no API or capability, and every documented valid input remained unchanged. Calling that a
+minor release implied new backward-compatible functionality that the diff did not contain. The
+fallback argument — "some previously accepted call now throws" — would, if applied without the
+documented-contract distinction, point to a major break rather than justify minor.
+
+The durable question is whether documented valid behavior changed, not whether buggy behavior
+was observable. Restoring the promised behavior for inputs already outside the contract is a
+patch; adding backward-compatible functionality is minor; breaking documented valid callers is
+major.
+
+→ Rule: `netcrypto-prd.md` §8, **Per-release hygiene** (SemVer classification).

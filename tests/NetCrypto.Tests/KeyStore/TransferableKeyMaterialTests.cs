@@ -11,17 +11,49 @@ namespace NetCrypto.Tests.KeyStore;
 /// </summary>
 public class TransferableKeyMaterialTests
 {
-    public static TheoryData<KeyType, int, int> ExpectedKeyLengths() => new()
+    private static readonly (KeyType KeyType, int PublicKeyLength, int PrivateKeyLength)[] KeyLengths =
+    [
+        (KeyType.Ed25519, 32, 32),
+        (KeyType.X25519, 32, 32),
+        (KeyType.P256, 33, 32),
+        (KeyType.P384, 49, 48),
+        (KeyType.P521, 67, 66),
+        (KeyType.Secp256k1, 33, 32),
+        (KeyType.Bls12381G1, 48, 32),
+        (KeyType.Bls12381G2, 96, 32),
+    ];
+
+    public static TheoryData<KeyType, int, int> ExpectedKeyLengths()
     {
-        { KeyType.Ed25519, 32, 32 },
-        { KeyType.X25519, 32, 32 },
-        { KeyType.P256, 33, 32 },
-        { KeyType.P384, 49, 48 },
-        { KeyType.P521, 67, 66 },
-        { KeyType.Secp256k1, 33, 32 },
-        { KeyType.Bls12381G1, 48, 32 },
-        { KeyType.Bls12381G2, 96, 32 },
-    };
+        var data = new TheoryData<KeyType, int, int>();
+        foreach (var (keyType, publicKeyLength, privateKeyLength) in KeyLengths)
+            data.Add(keyType, publicKeyLength, privateKeyLength);
+        return data;
+    }
+
+    public static TheoryData<KeyType, int, int> WrongPublicKeyLengths()
+    {
+        var data = new TheoryData<KeyType, int, int>();
+        foreach (var (keyType, publicKeyLength, privateKeyLength) in KeyLengths)
+        {
+            data.Add(keyType, publicKeyLength - 1, privateKeyLength);
+            data.Add(keyType, publicKeyLength + 1, privateKeyLength);
+        }
+
+        return data;
+    }
+
+    public static TheoryData<KeyType, int, int> WrongPrivateKeyLengths()
+    {
+        var data = new TheoryData<KeyType, int, int>();
+        foreach (var (keyType, publicKeyLength, privateKeyLength) in KeyLengths)
+        {
+            data.Add(keyType, publicKeyLength, privateKeyLength - 1);
+            data.Add(keyType, publicKeyLength, privateKeyLength + 1);
+        }
+
+        return data;
+    }
 
     private static byte[] BackingPrivateKey(TransferableKeyMaterial material)
     {
@@ -210,14 +242,14 @@ public class TransferableKeyMaterialTests
     }
 
     [Theory]
-    [MemberData(nameof(ExpectedKeyLengths))]
+    [MemberData(nameof(WrongPublicKeyLengths))]
     public void FromKeyPair_RejectsWrongPublicKeyLength(
         KeyType keyType, int publicKeyLength, int privateKeyLength)
     {
         using var pair = new KeyPair
         {
             KeyType = keyType,
-            PublicKey = new byte[publicKeyLength - 1],
+            PublicKey = new byte[publicKeyLength],
             PrivateKey = new byte[privateKeyLength],
         };
 
@@ -227,7 +259,7 @@ public class TransferableKeyMaterialTests
     }
 
     [Theory]
-    [MemberData(nameof(ExpectedKeyLengths))]
+    [MemberData(nameof(WrongPrivateKeyLengths))]
     public void FromKeyPair_RejectsWrongPrivateKeyLength(
         KeyType keyType, int publicKeyLength, int privateKeyLength)
     {
@@ -235,7 +267,7 @@ public class TransferableKeyMaterialTests
         {
             KeyType = keyType,
             PublicKey = new byte[publicKeyLength],
-            PrivateKey = new byte[privateKeyLength + 1],
+            PrivateKey = new byte[privateKeyLength],
         };
 
         var act = () => TransferableKeyMaterial.FromKeyPair(pair);

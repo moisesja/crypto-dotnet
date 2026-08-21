@@ -5,7 +5,7 @@ All notable changes to **NetCrypto** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.8.0] - 2026-08-20
+## [1.7.1] - 2026-08-20
 
 ### Fixed
 
@@ -486,8 +486,8 @@ library stack behind stable interfaces, so no domain library binds directly to a
 - **Native BBS distribution** for five RIDs (`osx-arm64`, `osx-x64`, `linux-x64`, `linux-arm64`,
   `win-x64`), packed into the single NuGet package; the repository stays source-only.
 
-[Unreleased]: https://github.com/moisesja/crypto-dotnet/compare/v1.8.0...HEAD
-[1.8.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.7.0...v1.8.0
+[Unreleased]: https://github.com/moisesja/crypto-dotnet/compare/v1.7.1...HEAD
+[1.7.1]: https://github.com/moisesja/crypto-dotnet/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.4.0...v1.5.0

@@ -873,7 +873,7 @@ CBOR APIs; Data Integrity / `eddsa-jcs-2022` proof engine; JCS canonicalizer; JO
 
 Definition of done = every checkbox in this document checked, plus: README written with the algorithm/spec conformance table (mirroring concept §2, marking BBS as draft-10-pinned) and linking to `samples/README.md` as the primary usage documentation, `PublicAPI.Shipped.txt` reviewed by the maintainer, and the concept-to-FR traceability table verified (every row implemented; no unmapped capability).
 
-**Per-release hygiene.** Every tagged release additionally: promotes `PublicAPI.Unshipped.txt` into `PublicAPI.Shipped.txt` (an API published to NuGet is by definition shipped — leaving it "unshipped" erases the baseline's ability to distinguish frozen surface from surface added since the last release), bumps `NetCryptoVersion` in `Directory.Build.props`, and closes the CHANGELOG's `[Unreleased]` section into a dated version heading with its compare link.
+**Per-release hygiene.** Every tagged release additionally: promotes `PublicAPI.Unshipped.txt` into `PublicAPI.Shipped.txt` (an API published to NuGet is by definition shipped — leaving it "unshipped" erases the baseline's ability to distinguish frozen surface from surface added since the last release), bumps `NetCryptoVersion` in `Directory.Build.props`, and closes the CHANGELOG's `[Unreleased]` section into a dated version heading with its compare link. SemVer classification follows the documented contract: restoring promised behavior for inputs already outside that contract is a patch; adding backward-compatible functionality is minor; breaking documented valid callers is major.
 
 ---
 

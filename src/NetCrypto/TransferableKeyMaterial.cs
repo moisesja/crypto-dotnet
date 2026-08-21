@@ -126,6 +126,9 @@ public sealed class TransferableKeyMaterial : IDisposable
     /// <exception cref="ArgumentNullException"><paramref name="keyPair"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException">
     /// The pair's key type is not defined, or either key is not the length that key type requires.
+    /// <see cref="ArgumentException.ParamName"/> identifies the offending component as
+    /// <c>keyType</c>, <c>publicKey</c>, or <c>privateKey</c>, respectively, rather than naming the
+    /// containing <paramref name="keyPair"/> argument.
     /// </exception>
     /// <exception cref="ObjectDisposedException"><paramref name="keyPair"/> has been disposed.</exception>
     public static TransferableKeyMaterial FromKeyPair(KeyPair keyPair)
