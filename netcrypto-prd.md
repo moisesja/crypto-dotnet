@@ -339,8 +339,9 @@ correct):
 13. **Import must prove the public key belongs to the private key.** `StoredKeyInfo.PublicKey` is
     the verification identity downstream DID/VC code publishes. The store derives the public key
     from the transferred secret and rejects a mismatch before commit; the transfer is spent either
-    way, because the store has already seen the secret. Wrong-length material is refused at
-    `TransferableKeyMaterial` construction, before it ever crosses the boundary.
+    way, because the store has already seen the secret. Both `TransferableKeyMaterial.FromRawKey`
+    and `FromKeyPair` refuse undefined key types and wrong-length material at construction, before
+    it ever crosses the boundary.
 14. **A callback must not re-enter what invoked it, and untrusted callback code must not run
     under a private lock.** `Monitor` is reentrant, so a provider callback would otherwise pass
     straight through the backend lock — and a nested delete zeroizes the pinned buffer an
