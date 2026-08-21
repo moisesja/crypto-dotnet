@@ -296,3 +296,37 @@ Each is a distinct pattern worth keeping:
 
 → Adversarial passes probe what code *does*; reviews also probe what code *claims*. Both were
 needed here. FR-7b rules 5/7/14; [`adversarial-pass`](../.claude/skills/adversarial-pass/SKILL.md).
+
+## L16 — Earlier rejection of already-invalid input is a patch, not a minor feature
+
+For issue #30 I followed the issue's compatibility note and prepared 1.8.0 because malformed
+`KeyPair` input would start failing earlier. That was the wrong SemVer axis. The public contract
+already required wrong-length material to be rejected before the custody boundary, the change
+added no API or capability, and every documented valid input remained unchanged. Calling that a
+minor release implied new backward-compatible functionality that the diff did not contain. The
+fallback argument — "some previously accepted call now throws" — would, if applied without the
+documented-contract distinction, point to a major break rather than justify minor.
+
+The durable question is whether documented valid behavior changed, not whether buggy behavior
+was observable. Restoring the promised behavior for inputs already outside the contract is a
+patch; adding backward-compatible functionality is minor; breaking documented valid callers is
+major.
+
+→ Rule: `netcrypto-prd.md` §8, **Per-release hygiene** (SemVer classification).
+
+## L17 — A probabilistic assertion on random-key output is a flake you must fix, not report
+
+Reviewing PR #31, the Windows leg failed `Secp256k1_IsAlwaysFixedWidthCompact`: the test
+asserted `signature[0] != 0x30` on a compact r‖s signature made with a freshly generated key.
+r's first byte is uniform, so the assertion rejects a *valid* signature ~1 run in 256 — measured
+at 18/5,000 in an executable probe, every one verifying. Two lessons:
+
+1. **Never assert a property of cryptographically random bytes unless it holds with certainty.**
+   "Not DER" was already proven by the deterministic facts: fixed 64-byte width and a compact
+   verification round-trip. The first-byte check added nothing but a built-in failure rate. Its
+   positive sibling (`DER starts with 0x30`) is fine — that one is a certainty of the encoding.
+2. **When a review diagnoses a concrete defect, deliver the fix, not a recommendation.** I had
+   root-caused the flake, named the line, and proposed the exact change — then told the author to
+   file a follow-up. The user had to say "you fix it". A confirmed root cause plus a known
+   minimal fix means the fix is the deliverable (workflow policy: AGENTS.md §Autonomous Bug
+   Fixing).

@@ -11,6 +11,50 @@ namespace NetCrypto.Tests.KeyStore;
 /// </summary>
 public class TransferableKeyMaterialTests
 {
+    private static readonly (KeyType KeyType, int PublicKeyLength, int PrivateKeyLength)[] KeyLengths =
+    [
+        (KeyType.Ed25519, 32, 32),
+        (KeyType.X25519, 32, 32),
+        (KeyType.P256, 33, 32),
+        (KeyType.P384, 49, 48),
+        (KeyType.P521, 67, 66),
+        (KeyType.Secp256k1, 33, 32),
+        (KeyType.Bls12381G1, 48, 32),
+        (KeyType.Bls12381G2, 96, 32),
+    ];
+
+    public static TheoryData<KeyType, int, int> ExpectedKeyLengths()
+    {
+        var data = new TheoryData<KeyType, int, int>();
+        foreach (var (keyType, publicKeyLength, privateKeyLength) in KeyLengths)
+            data.Add(keyType, publicKeyLength, privateKeyLength);
+        return data;
+    }
+
+    public static TheoryData<KeyType, int, int> WrongPublicKeyLengths()
+    {
+        var data = new TheoryData<KeyType, int, int>();
+        foreach (var (keyType, publicKeyLength, privateKeyLength) in KeyLengths)
+        {
+            data.Add(keyType, publicKeyLength - 1, privateKeyLength);
+            data.Add(keyType, publicKeyLength + 1, privateKeyLength);
+        }
+
+        return data;
+    }
+
+    public static TheoryData<KeyType, int, int> WrongPrivateKeyLengths()
+    {
+        var data = new TheoryData<KeyType, int, int>();
+        foreach (var (keyType, publicKeyLength, privateKeyLength) in KeyLengths)
+        {
+            data.Add(keyType, publicKeyLength, privateKeyLength - 1);
+            data.Add(keyType, publicKeyLength, privateKeyLength + 1);
+        }
+
+        return data;
+    }
+
     private static byte[] BackingPrivateKey(TransferableKeyMaterial material)
     {
         var field = typeof(TransferableKeyMaterial).GetField("_privateKey", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -147,6 +191,108 @@ public class TransferableKeyMaterialTests
         var act = () => TransferableKeyMaterial.FromKeyPair(null!);
 
         act.Should().Throw<ArgumentNullException>().WithParameterName("keyPair");
+    }
+
+    [Fact]
+    public void FromKeyPair_RejectsAnUndefinedKeyType()
+    {
+        using var pair = new KeyPair
+        {
+            KeyType = (KeyType)999,
+            PublicKey = new byte[32],
+            PrivateKey = new byte[32],
+        };
+
+        var act = () => TransferableKeyMaterial.FromKeyPair(pair);
+
+        act.Should().Throw<ArgumentException>().WithParameterName("keyType");
+    }
+
+    [Theory]
+    [InlineData(0, 32, "publicKey")]
+    [InlineData(32, 0, "privateKey")]
+    public void FromKeyPair_RejectsEmptyMaterial(
+        int publicKeyLength, int privateKeyLength, string expectedParameter)
+    {
+        using var pair = new KeyPair
+        {
+            KeyType = KeyType.Ed25519,
+            PublicKey = new byte[publicKeyLength],
+            PrivateKey = new byte[privateKeyLength],
+        };
+
+        var act = () => TransferableKeyMaterial.FromKeyPair(pair);
+
+        act.Should().Throw<ArgumentException>().WithParameterName(expectedParameter);
+    }
+
+    [Fact]
+    public void FromKeyPair_RejectsTheExpandedLibsodiumEd25519SecretKey()
+    {
+        using var pair = new KeyPair
+        {
+            KeyType = KeyType.Ed25519,
+            PublicKey = new byte[32],
+            PrivateKey = new byte[64], // libsodium: seed || public key; NetCrypto accepts the 32-byte seed.
+        };
+
+        var act = () => TransferableKeyMaterial.FromKeyPair(pair);
+
+        act.Should().Throw<ArgumentException>().WithParameterName("privateKey");
+    }
+
+    [Theory]
+    [MemberData(nameof(WrongPublicKeyLengths))]
+    public void FromKeyPair_RejectsWrongPublicKeyLength(
+        KeyType keyType, int publicKeyLength, int privateKeyLength)
+    {
+        using var pair = new KeyPair
+        {
+            KeyType = keyType,
+            PublicKey = new byte[publicKeyLength],
+            PrivateKey = new byte[privateKeyLength],
+        };
+
+        var act = () => TransferableKeyMaterial.FromKeyPair(pair);
+
+        act.Should().Throw<ArgumentException>().WithParameterName("publicKey");
+    }
+
+    [Theory]
+    [MemberData(nameof(WrongPrivateKeyLengths))]
+    public void FromKeyPair_RejectsWrongPrivateKeyLength(
+        KeyType keyType, int publicKeyLength, int privateKeyLength)
+    {
+        using var pair = new KeyPair
+        {
+            KeyType = keyType,
+            PublicKey = new byte[publicKeyLength],
+            PrivateKey = new byte[privateKeyLength],
+        };
+
+        var act = () => TransferableKeyMaterial.FromKeyPair(pair);
+
+        act.Should().Throw<ArgumentException>().WithParameterName("privateKey");
+    }
+
+    [Theory]
+    [MemberData(nameof(ExpectedKeyLengths))]
+    public void FromKeyPair_AcceptsExpectedLengths(
+        KeyType keyType, int publicKeyLength, int privateKeyLength)
+    {
+        using var pair = new KeyPair
+        {
+            KeyType = keyType,
+            PublicKey = new byte[publicKeyLength],
+            PrivateKey = new byte[privateKeyLength],
+        };
+
+        using var material = TransferableKeyMaterial.FromKeyPair(pair);
+
+        material.KeyType.Should().Be(keyType);
+        material.PublicKey.Should().HaveCount(publicKeyLength);
+        material.IsConsumed.Should().BeFalse();
+        pair.Invoking(p => p.PublicKey).Should().NotThrow("the source pair remains caller-owned");
     }
 
     // --- transfer through the store ---

@@ -116,10 +116,20 @@ public sealed class TransferableKeyMaterial : IDisposable
     /// disposed — it is the caller's object and disposing it here would be a surprising side
     /// effect — so dispose it yourself once the transfer object exists, to avoid leaving a
     /// second live copy of the secret behind.
+    /// Both key lengths are validated before a transfer owner is created, matching
+    /// <see cref="FromRawKey"/>. In particular, a malformed private key is rejected while it is
+    /// only borrowed from <paramref name="keyPair"/>, before it can cross the single-read custody
+    /// boundary.
     /// </remarks>
     /// <param name="keyPair">The key pair to transfer. Must not be disposed.</param>
     /// <returns>A fresh, unconsumed transfer object owning its own copy of the material.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="keyPair"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException">
+    /// The pair's key type is not defined, or either key is not the length that key type requires.
+    /// <see cref="ArgumentException.ParamName"/> identifies the offending component as
+    /// <c>keyType</c>, <c>publicKey</c>, or <c>privateKey</c>, respectively, rather than naming the
+    /// containing <paramref name="keyPair"/> argument.
+    /// </exception>
     /// <exception cref="ObjectDisposedException"><paramref name="keyPair"/> has been disposed.</exception>
     public static TransferableKeyMaterial FromKeyPair(KeyPair keyPair)
     {
@@ -127,8 +137,14 @@ public sealed class TransferableKeyMaterial : IDisposable
 
         var publicKey = keyPair.PublicKey;
         var keyType = keyPair.KeyType;
+        ValidateKeyTypeAndPublicKey(keyType, publicKey);
+
         return keyPair.WithPrivateKey(
-            privateKey => new TransferableKeyMaterial(keyType, publicKey, privateKey));
+            privateKey =>
+            {
+                ValidatePrivateKey(keyType, privateKey);
+                return new TransferableKeyMaterial(keyType, publicKey, privateKey);
+            });
     }
 
     /// <summary>
@@ -159,16 +175,26 @@ public sealed class TransferableKeyMaterial : IDisposable
     public static TransferableKeyMaterial FromRawKey(
         KeyType keyType, ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> privateKey)
     {
+        ValidateKeyTypeAndPublicKey(keyType, publicKey);
+        ValidatePrivateKey(keyType, privateKey);
+
+        return new TransferableKeyMaterial(keyType, publicKey, privateKey);
+    }
+
+    private static void ValidateKeyTypeAndPublicKey(KeyType keyType, ReadOnlySpan<byte> publicKey)
+    {
         if (!Enum.IsDefined(keyType))
             throw new ArgumentException($"Key type {(int)keyType} is not a defined {nameof(NetCrypto.KeyType)}.", nameof(keyType));
         if (!keyType.IsValidKeyLength(publicKey.Length))
             throw new ArgumentException(
                 $"A {keyType} public key must be the canonical encoding for that key type; got {publicKey.Length} bytes.",
                 nameof(publicKey));
+    }
+
+    private static void ValidatePrivateKey(KeyType keyType, ReadOnlySpan<byte> privateKey)
+    {
         RawKeyGuard.RequireLength(
             privateKey, PrivateKeyLength(keyType), nameof(privateKey), $"A {keyType} private key");
-
-        return new TransferableKeyMaterial(keyType, publicKey, privateKey);
     }
 
     // The raw scalar/seed size each key type stores, matching what IKeyGenerator produces.

@@ -5,6 +5,18 @@ All notable changes to **NetCrypto** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-08-20
+
+### Fixed
+
+- **`TransferableKeyMaterial.FromKeyPair` now validates key type and both key lengths before
+  creating the one-way transfer owner**, matching `FromRawKey`. A malformed `KeyPair`—including
+  the common 64-byte libsodium Ed25519 secret-key representation where NetCrypto requires the
+  32-byte seed—previously crossed the custody boundary and was discoverable only after the
+  receiving store spent the transfer's single `Consume`. Undefined key types and malformed
+  public/private lengths now fail immediately with parameter-named `ArgumentException`; valid
+  callers are unchanged. (#30)
+
 ## [1.7.0] - 2026-08-18
 
 ### Changed
@@ -474,7 +486,8 @@ library stack behind stable interfaces, so no domain library binds directly to a
 - **Native BBS distribution** for five RIDs (`osx-arm64`, `osx-x64`, `linux-x64`, `linux-arm64`,
   `win-x64`), packed into the single NuGet package; the repository stays source-only.
 
-[Unreleased]: https://github.com/moisesja/crypto-dotnet/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/moisesja/crypto-dotnet/compare/v1.7.1...HEAD
+[1.7.1]: https://github.com/moisesja/crypto-dotnet/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/moisesja/crypto-dotnet/compare/v1.4.0...v1.5.0
